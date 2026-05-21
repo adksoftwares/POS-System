@@ -1,0 +1,100 @@
+:root {
+  --primary-navy: #1A237E;
+  --secondary-emerald: #27AE60;
+  --tertiary-crimson: #E74C3C;
+  --bg-white: #FFFFFF;
+  --bg-offwhite: #F8F9FA;
+  --text-dark: #212121;
+  --text-light: #FFFFFF;
+  --text-muted: #757575;
+  --border-color: #E0E0E0;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', 'Roboto', sans-serif;
+  background-color: var(--bg-offwhite);
+  color: var(--text-dark);
+}
+
+.pos-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.product-area {
+  flex: 0 0 70%;
+  padding: 1.5rem;
+  overflow-y: auto;
+  background-color: var(--bg-offwhite);
+}
+
+.cart-area {
+  flex: 0 0 30%;
+  background-color: var(--bg-white);
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.header-bar {
+  background-color: var(--primary-navy);
+  color: var(--text-light);
+  padding: 1rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-bar h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+/* Base Buttons */
+.btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+.btn-primary { background-color: var(--primary-navy); color: white; }
+.btn-success { background-color: var(--secondary-emerald); color: white; }
+.btn-danger { background-color: var(--tertiary-crimson); color: white; }
+.btn:hover { opacity: 0.9; transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+.suggestions-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  background: white;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  z-index: 50;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.suggestions-dropdown li {
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--bg-offwhite);
+}
+
+.suggestions-dropdown li:hover, .suggestions-dropdown li.selected {
+  background-color: var(--bg-offwhite);
+}
+
+.suggestions-dropdown li:last-child {
+  border-bottom: none;
+}

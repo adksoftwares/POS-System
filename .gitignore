@@ -1,0 +1,62 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+web_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+dist_electron/
+out/
+build/
+release/
+
+# Firebase configuration & cache
+.firebase/
+firestore.local.db
+chrome-debug.log
+.firebaserc
+
+# Firebase Functions
+functions/node_modules/
+functions/lib/
+
+# Mobile Client build files (Android/iOS)
+mobile/.gradle/
+mobile/build/
+mobile/app/build/
+mobile/local.properties
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/ios/*.xcworkspace
+*.apk
+*.aar
+
+# Environment variables & secrets
+.env
+.env.local
+.env.*.local
+*.local
+google-services.json
+GoogleService-Info.plist
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# IDE configurations
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
