@@ -1,11 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { dbCloud, auth } from '../config/firebase';
-import { doc, getDoc, updateDoc, collection, getDocs, setDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { sendPasswordResetEmail, signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../db/database';
 import { useSyncManager } from '../hooks/useSyncManager';
 import './SettingsScreen.css';
+
+import toast from 'react-hot-toast';
+
+const SRI_LANKAN_BANKS = [
+  "Amana Bank",
+  "Bank of Ceylon (BOC)",
+  "Cargills Bank",
+  "Commercial Bank of Ceylon",
+  "DFCC Bank",
+  "Hatton National Bank (HNB)",
+  "Housing Development Finance Corporation (HDFC)",
+  "National Savings Bank (NSB)",
+  "Nations Trust Bank (NTB)",
+  "Pan Asia Bank",
+  "People's Bank",
+  "Regional Development Bank (RDB)",
+  "Sampath Bank",
+  "SANASA Development Bank (SDB)",
+  "Seylan Bank",
+  "State Mortgage & Investment Bank (SMIB)",
+  "Union Bank of Colombo",
+  "HSBC",
+  "Standard Chartered Bank",
+  "Citibank"
+];
 
 export default function SettingsScreen() {
   const [shopName, setShopName] = useState('');
@@ -20,7 +45,24 @@ export default function SettingsScreen() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [changePasswordLoading, setChangePasswordLoading] = useState(false);
-  const [statusMsg, setStatusMsg] = useState({ text: '', type: '' });
+
+  // Bank Configuration state (Admin Only)
+  const [bankName, setBankName] = useState('');
+  const [holderName, setHolderName] = useState('');
+  const [accNumber, setAccNumber] = useState('');
+  const [bankAccountsList, setBankAccountsList] = useState([]);
+  const [bankLoading, setBankLoading] = useState(false);
+
+  // Payment states
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentBankId, setPaymentBankId] = useState('');
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardHolder, setCardHolder] = useState('');
+  const [cardExpiry, setCardExpiry] = useState('');
+  const [cardCvv, setCardCvv] = useState('');
+  const [processingPayment, setProcessingPayment] = useState(false);
+  const [adminBankAccounts, setAdminBankAccounts] = useState([]);
+  const [detectedBrand, setDetectedBrand] = useState('');
 
   const navigate = useNavigate();
 
@@ -30,11 +72,17 @@ export default function SettingsScreen() {
   const role = localStorage.getItem('adk_role') || 'User';
   const userEmail = localStorage.getItem('adk_userEmail') || '';
 
+  const isSuperAdmin = userEmail.trim().toLowerCase() === 'arikarran14@gmail.com';
+  const hasPremium = isSuperAdmin || tier === 'Premium';
+
   const showStatus = (text, type = 'success') => {
-    setStatusMsg({ text, type });
-    setTimeout(() => {
-      setStatusMsg({ text: '', type: '' });
-    }, 4000);
+    if (type === 'error') {
+      toast.error(text);
+    } else if (type === 'info') {
+      toast(text, { icon: 'ℹ️' });
+    } else {
+      toast.success(text);
+    }
   };
 
   useEffect(() => {
@@ -50,18 +98,35 @@ export default function SettingsScreen() {
           setPhone(data.phone || '');
           setTier(data.subscriptionTier || 'Free');
         }
-      } catch (e) {
-        console.log("Offline mode, using cached settings if any.");
+      } catch (err) {
+        console.log("Offline mode, using cached settings if any.", err);
       }
     }
     fetchOrg();
   }, [orgId]);
 
+  // Load Admin Bank Accounts
+  useEffect(() => {
+    async function fetchBankAccounts() {
+      if (!isSuperAdmin) return;
+      try {
+        const snap = await getDocs(collection(dbCloud, "BankAccounts"));
+        const list = [];
+        snap.forEach(doc => {
+          list.push({ id: doc.id, ...doc.data() });
+        });
+        setBankAccountsList(list);
+      } catch (e) {
+        console.error("Could not fetch bank accounts", e);
+      }
+    }
+    fetchBankAccounts();
+  }, [isSuperAdmin]);
+
   const handleSaveShopDetails = async (e) => {
     e.preventDefault();
     if (!orgId) return showStatus('No active organization context found.', 'error');
     setLoading(true);
-    setStatusMsg({ text: '', type: '' });
     try {
       await updateDoc(doc(dbCloud, "Organizations", orgId), {
         shopName,
@@ -79,7 +144,6 @@ export default function SettingsScreen() {
 
   const handlePasswordReset = async () => {
     if (!userEmail) return;
-    setStatusMsg({ text: '', type: '' });
     try {
       await sendPasswordResetEmail(auth, userEmail);
       showStatus("Password reset email sent to " + userEmail, "success");
@@ -99,14 +163,11 @@ export default function SettingsScreen() {
     }
 
     setChangePasswordLoading(true);
-    setStatusMsg({ text: '', type: '' });
     try {
       const user = auth.currentUser;
       if (user) {
-        // Reauthenticate user
         const credential = EmailAuthProvider.credential(user.email, currentPassword);
         await reauthenticateWithCredential(user, credential);
-        // Update password
         await updatePassword(user, newPassword);
         showStatus("Password updated successfully!", "success");
         setCurrentPassword('');
@@ -130,17 +191,15 @@ export default function SettingsScreen() {
     setSyncing(true);
     showStatus("Initializing Cloud Synchronization...", "info");
     try {
-      // 1. Fetch from Dexie and Push to Cloud
       const localProducts = await db.products.toArray();
       let uploadCount = 0;
       for (const prod of localProducts) {
-        const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/Main/Products`, prod.id);
+        const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`, prod.id);
         await setDoc(docRef, prod, { merge: true });
         uploadCount++;
       }
 
-      // 2. Fetch from Cloud and Pull to local Dexie
-      const productsRef = collection(dbCloud, `Organizations/${orgId}/Branches/Main/Products`);
+      const productsRef = collection(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`);
       const snapshot = await getDocs(productsRef);
       const cloudProducts = [];
       snapshot.forEach((doc) => {
@@ -160,17 +219,272 @@ export default function SettingsScreen() {
     }
   };
 
+  useEffect(() => {
+    async function fetchAdminBanks() {
+      if (showPaymentModal) {
+        try {
+          const snap = await getDocs(collection(dbCloud, "BankAccounts"));
+          const list = [];
+          snap.forEach(doc => {
+            if (doc.data().isEnabled !== false) {
+              list.push({ id: doc.id, ...doc.data() });
+            }
+          });
+          setAdminBankAccounts(list);
+          if (list.length > 0) {
+            setPaymentBankId(list[0].id);
+          }
+        } catch (e) {
+          console.error("Could not load admin bank accounts:", e);
+        }
+      }
+    }
+    fetchAdminBanks();
+  }, [showPaymentModal]);
+
+  const handleCardNumberChange = (e) => {
+    let val = e.target.value.replace(/\D/g, '');
+    if (val.length > 16) val = val.slice(0, 16);
+    let formatted = val.match(/.{1,4}/g)?.join(' ') || val;
+    setCardNumber(formatted);
+
+    if (val.startsWith('4')) {
+      setDetectedBrand('Visa');
+    } else if (val.startsWith('5') || val.startsWith('2')) {
+      setDetectedBrand('MasterCard');
+    } else if (val.startsWith('62')) {
+      setDetectedBrand('UnionPay');
+    } else {
+      setDetectedBrand('');
+    }
+  };
+
+  const handleExpiryChange = (e) => {
+    let val = e.target.value.replace(/\D/g, '');
+    if (val.length > 4) val = val.slice(0, 4);
+    let formatted = val;
+    if (val.length >= 2) {
+      formatted = val.slice(0, 2) + '/' + val.slice(2);
+    }
+    setCardExpiry(formatted);
+  };
+
+  const handleProcessPayment = async (e) => {
+    e.preventDefault();
+    if (!paymentBankId) {
+      showStatus("Please select a bank account first.", "error");
+      return;
+    }
+    const cleanCard = cardNumber.replace(/\s/g, '');
+    if (cleanCard.length < 16) {
+      showStatus("Invalid Card Number. Must be 16 digits.", "error");
+      return;
+    }
+    if (cardExpiry.length < 5) {
+      showStatus("Invalid Expiry Date (MM/YY).", "error");
+      return;
+    }
+    if (cardCvv.length < 3) {
+      showStatus("Invalid CVV.", "error");
+      return;
+    }
+
+    setProcessingPayment(true);
+    showStatus("Processing card payment of Rs. 5,000...", "info");
+    
+    setTimeout(async () => {
+      try {
+        const randomKey = "LIC-" + Math.random().toString(36).substr(2, 9).toUpperCase();
+        const keyRef = doc(dbCloud, "LicenseKeys", randomKey);
+        await setDoc(keyRef, {
+          key: randomKey,
+          email: userEmail,
+          durationMonths: 1,
+          isUsed: false,
+          createdAt: new Date().toISOString(),
+          selectedBankAccountId: paymentBankId,
+          amountPaid: 5000
+        });
+
+        const payRef = doc(collection(dbCloud, "Payments"));
+        await setDoc(payRef, {
+          paymentId: payRef.id,
+          amount: 5000,
+          userEmail,
+          bankAccountId: paymentBankId,
+          cardholderName: cardHolder,
+          licenseKeyGenerated: randomKey,
+          timestamp: new Date().toISOString()
+        });
+
+        setProcessingPayment(false);
+        setShowPaymentModal(false);
+
+        setCardNumber('');
+        setCardHolder('');
+        setCardExpiry('');
+        setCardCvv('');
+        setDetectedBrand('');
+
+        const applyNow = window.confirm(`Payment processed successfully!\n\nYour Premium License Key is:\n${randomKey}\n\nWould you like to automatically apply this key to upgrade your account instantly?`);
+        if (applyNow) {
+          setLoading(true);
+          await updateDoc(keyRef, {
+            isUsed: true,
+            usedByOrgId: orgId,
+            usedAt: new Date().toISOString()
+          });
+          
+          const oneMonthFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+          await updateDoc(doc(dbCloud, "Organizations", orgId), {
+            subscriptionTier: "Premium",
+            premiumExpiresAt: oneMonthFromNow
+          });
+          
+          const currentUser = auth.currentUser;
+          if (currentUser) {
+            await updateDoc(doc(dbCloud, "Users", currentUser.uid), {
+              role: "premium"
+            });
+          }
+          setTier("Premium");
+          showStatus("Upgrade successful! Your account is now Premium for 1 month.", "success");
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error(err);
+        showStatus("Payment succeeded, but key generation failed: " + err.message, "error");
+        setProcessingPayment(false);
+        setLoading(false);
+      }
+    }, 2000);
+  };
+
   const handleApplyLicense = async (e) => {
     e.preventDefault();
-    alert(`Validating license key: ${licenseKey}... (Demo)`);
-    setLicenseKey('');
+    if (!orgId) return showStatus('No active organization context found.', 'error');
+    setLoading(true);
+    try {
+      let cleanKey = licenseKey.trim().toUpperCase();
+      
+      // Auto-prefix normalization: handle cases where user inputs only the key suffix
+      if (!cleanKey.startsWith('ADK-LIC-') && !cleanKey.startsWith('LIC-')) {
+        if (cleanKey.length === 6) {
+          cleanKey = `ADK-LIC-${cleanKey}`;
+        } else if (cleanKey.length === 9) {
+          cleanKey = `LIC-${cleanKey}`;
+        }
+      }
+      
+      const keyRef = doc(dbCloud, "LicenseKeys", cleanKey);
+      const keySnap = await getDoc(keyRef);
+      
+      if (!keySnap.exists()) {
+        showStatus("Invalid ADK License Key.", "error");
+        setLoading(false);
+        return;
+      }
+      
+      const keyData = keySnap.data();
+      if (keyData.isUsed) {
+        showStatus("This License Key has already been activated.", "error");
+        setLoading(false);
+        return;
+      }
+      
+      if (keyData.email.trim().toLowerCase() !== userEmail.trim().toLowerCase()) {
+        showStatus(`This License Key is registered to ${keyData.email}, not your email.`, "error");
+        setLoading(false);
+        return;
+      }
+      
+      await updateDoc(keyRef, {
+        isUsed: true,
+        usedByOrgId: orgId,
+        usedAt: new Date().toISOString()
+      });
+      
+      const oneMonthFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      await updateDoc(doc(dbCloud, "Organizations", orgId), {
+        subscriptionTier: "Premium",
+        premiumExpiresAt: oneMonthFromNow
+      });
+      
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        await updateDoc(doc(dbCloud, "Users", currentUser.uid), {
+          role: "premium"
+        });
+      }
+      
+      setTier("Premium");
+      showStatus("Successfully upgraded to Premium Tier!", "success");
+      setLicenseKey('');
+    } catch (err) {
+      console.error(err);
+      showStatus("Failed to apply license: " + err.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddBankAccount = async (e) => {
+    e.preventDefault();
+    setBankLoading(true);
+    try {
+      const newAcc = {
+        bankName,
+        accountHolder: holderName,
+        accountNumber: accNumber,
+        isEnabled: true,
+        lastUpdated: new Date().toISOString()
+      };
+      const docRef = doc(collection(dbCloud, "BankAccounts"));
+      await setDoc(docRef, newAcc);
+      setBankAccountsList(prev => [...prev, { id: docRef.id, ...newAcc }]);
+      setBankName('');
+      setHolderName('');
+      setAccNumber('');
+      showStatus("Bank account added successfully!", "success");
+    } catch (err) {
+      console.error(err);
+      showStatus("Failed to add bank account.", "error");
+    } finally {
+      setBankLoading(false);
+    }
+  };
+
+  const handleDeleteBankAccount = async (id) => {
+    try {
+      await deleteDoc(doc(dbCloud, "BankAccounts", id));
+      setBankAccountsList(prev => prev.filter(b => b.id !== id));
+      showStatus("Bank account deleted.", "success");
+    } catch (err) {
+      console.error(err);
+      showStatus("Failed to delete account.", "error");
+    }
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    try {
+      await signOut(auth);
+      try {
+        await db.products.clear();
+        await db.transactions.clear();
+        await db.attendance_logs.clear();
+        await db.suppliers.clear();
+        await db.purchase_orders.clear();
+      } catch (dbErr) {
+        console.error("Error clearing Dexie tables on logout:", dbErr);
+      }
+    } catch (e) {
+      console.error("Signout error:", e);
+    }
     localStorage.clear();
     navigate('/login');
   };
+
+  const roleDisplay = isSuperAdmin ? "Super Admin" : (hasPremium ? "Premium " + role : role);
 
   return (
     <div className="settings-layout">
@@ -181,29 +495,13 @@ export default function SettingsScreen() {
             className="btn btn-success" 
             onClick={handleForceSync} 
             disabled={syncing}
-            style={{ backgroundColor: 'var(--secondary-emerald)', border: 'none' }}
+            style={{ border: 'none' }}
           >
             {syncing ? 'Syncing...' : 'Force Cloud Sync'}
           </button>
           <button className="btn btn-danger" onClick={handleLogout}>Logout</button>
         </div>
       </div>
-
-      {statusMsg.text && (
-        <div style={{
-          color: statusMsg.type === 'error' ? 'var(--tertiary-crimson)' : 'var(--secondary-emerald)',
-          backgroundColor: statusMsg.type === 'error' ? '#fce8e6' : '#e6f4ea',
-          padding: '0.75rem',
-          borderRadius: '6px',
-          margin: '0 2rem 1.5rem 2rem',
-          textAlign: 'center',
-          fontSize: '0.95rem',
-          fontWeight: 'bold',
-          border: '1px solid ' + (statusMsg.type === 'error' ? '#f5c2c2' : '#c2f5d3')
-        }}>
-          {statusMsg.text}
-        </div>
-      )}
 
       <div className="settings-grid">
         {/* Shop Details Card (Admin Only) */}
@@ -233,7 +531,7 @@ export default function SettingsScreen() {
           <h3>Account Profile</h3>
           <div className="profile-info" style={{ marginBottom: '1rem' }}>
             <p><strong>Email:</strong> {userEmail}</p>
-            <p><strong>Role:</strong> {role}</p>
+            <p><strong>Role:</strong> {roleDisplay}</p>
             <p><strong>Org ID:</strong> {orgId || 'Resolving active cloud session...'}</p>
           </div>
           <button className="btn btn-secondary" onClick={handlePasswordReset}>Send Password Reset Email</button>
@@ -279,23 +577,352 @@ export default function SettingsScreen() {
           </form>
         </div>
 
-        {/* Subscription & Billing Card (Admin Only) */}
+        {/* Configure Bank Accounts (Super Admin Only) */}
+        {isSuperAdmin && (
+          <div className="settings-card">
+            <h3>Configure Bank Accounts (Admin Only)</h3>
+            <form onSubmit={handleAddBankAccount}>
+              <div className="form-group">
+                <label>Bank Name</label>
+                <input 
+                  type="text" 
+                  value={bankName} 
+                  onChange={e => setBankName(e.target.value)} 
+                  required 
+                  placeholder="e.g. Bank of Ceylon" 
+                  list="srilankan-banks"
+                />
+                <datalist id="srilankan-banks">
+                  {SRI_LANKAN_BANKS.map((bank, index) => (
+                    <option key={index} value={bank} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="form-group">
+                <label>Account Holder Name</label>
+                <input 
+                  type="text" 
+                  value={holderName} 
+                  onChange={e => setHolderName(e.target.value)} 
+                  required 
+                  placeholder="e.g. ADK Solutions" 
+                />
+              </div>
+              <div className="form-group">
+                <label>Account Number</label>
+                <input 
+                  type="text" 
+                  value={accNumber} 
+                  onChange={e => setAccNumber(e.target.value)} 
+                  required 
+                  placeholder="e.g. 123456789" 
+                />
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={bankLoading}>Add Account</button>
+            </form>
+            
+            <h4 style={{ marginTop: '1.5rem', marginBottom: '0.75rem' }}>Active Accounts</h4>
+            <ul style={{ listStyle: 'none', padding: 0 }}>
+              {bankAccountsList.map(b => (
+                <li 
+                  key={b.id} 
+                  style={{ 
+                    display: 'flex', justifyContent: 'space-between', 
+                    alignItems: 'center', padding: '0.5rem', 
+                    borderBottom: '1px solid var(--border-light)' 
+                  }}
+                >
+                  <div>
+                    <strong>{b.bankName}</strong><br />
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{b.accountNumber} ({b.accountHolder})</span>
+                  </div>
+                  <button 
+                    className="btn btn-danger" 
+                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }} 
+                    onClick={() => handleDeleteBankAccount(b.id)}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+              {bankAccountsList.length === 0 && (
+                <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>No accounts configured.</span>
+              )}
+            </ul>
+          </div>
+        )}
+
+        {/* Subscription & Billing Card (Admin/Owner Only) */}
         {role !== 'Cashier' && (
           <div className="settings-card subscription-card">
             <h3>Subscription & Billing</h3>
-            <div className="tier-info">
-              <p>Current Tier: <strong className={`tier-badge tier-${tier.toLowerCase()}`}>{tier}</strong></p>
-              <p>Status: Active</p>
+            <div className="tier-info" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+              <p>Current Tier: <strong className={`tier-badge tier-${tier.toLowerCase()}`} style={{
+                padding: '0.25rem 0.50rem',
+                borderRadius: '6px',
+                background: tier === 'Premium' ? 'linear-gradient(135deg, var(--accent-primary), var(--accent-hover))' : 'var(--bg-secondary)',
+                color: 'white',
+                fontSize: '0.85rem',
+                marginLeft: '0.5rem',
+                display: 'inline-block'
+              }}>{tier}</strong></p>
+              <p>Status: <span style={{ color: tier === 'Premium' ? 'var(--secondary-emerald)' : 'var(--text-muted)', fontWeight: 'bold' }}>{tier === 'Premium' ? 'Active Premium' : 'Free Tier (50 Bill Limit)'}</span></p>
             </div>
-            <hr />
-            <form onSubmit={handleApplyLicense} className="license-form">
-              <label>Upgrade Account</label>
-              <input type="text" placeholder="Enter ADK License Key" value={licenseKey} onChange={e => setLicenseKey(e.target.value)} required />
-              <button type="submit" className="btn btn-success">Apply Key</button>
+            <hr style={{ border: 'none', borderBottom: '1px solid var(--border-light)', margin: '1rem 0' }} />
+            <form onSubmit={handleApplyLicense} className="license-form" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Apply Upgrade Key</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <input 
+                  type="text" 
+                  placeholder="Enter ADK License Key" 
+                  value={licenseKey} 
+                  onChange={e => setLicenseKey(e.target.value)} 
+                  required 
+                  style={{
+                    flex: 1,
+                    padding: '0.6rem',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-light)',
+                    background: 'var(--bg-glass)',
+                    color: 'var(--text-primary)',
+                    outline: 'none'
+                  }}
+                />
+                <button type="submit" className="btn btn-success" disabled={loading} style={{ padding: '0.6rem 1.2rem' }}>
+                  {loading ? 'Applying...' : 'Apply Key'}
+                </button>
+              </div>
             </form>
+            
+            {tier !== 'Premium' && (
+              <div style={{ marginTop: '1.5rem' }}>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem', lineHeight: '1.4' }}>
+                  Don't have a license key? Purchase a Premium Key instantly using your Visa, MasterCard, or UnionPay credit/debit card.
+                </div>
+                <button 
+                  type="button" 
+                  className="btn btn-primary" 
+                  onClick={() => setShowPaymentModal(true)} 
+                  style={{ width: '100%', padding: '0.75rem', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}
+                >
+                  💳 Pay Premium Subscription (Rs. 5,000)
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      {/* Premium Subscription Payment Modal */}
+      {showPaymentModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          backdropFilter: 'blur(8px)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999,
+          padding: '1rem',
+          color: 'var(--text-primary)'
+        }}>
+          <div className="glass-panel animate-scale-in" style={{
+            width: '100%',
+            maxWidth: '500px',
+            padding: '2rem',
+            borderRadius: '20px',
+            background: 'rgba(20, 24, 40, 0.95)',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            maxHeight: '90vh',
+            overflowY: 'auto'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1.4rem', fontWeight: '800', background: 'linear-gradient(90deg, #818cf8, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                💳 Pay Premium - Rs. 5,000 / Mo
+              </h3>
+              <button 
+                onClick={() => setShowPaymentModal(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '1.5rem', cursor: 'pointer' }}
+              >&times;</button>
+            </div>
+            
+            <form onSubmit={handleProcessPayment} style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+              
+              {/* Select Bank Account */}
+              <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Select Super Admin Bank Account</label>
+                {adminBankAccounts.length === 0 ? (
+                  <div style={{ color: 'var(--tertiary-crimson)', fontSize: '0.85rem', padding: '0.5rem', border: '1px dashed var(--tertiary-crimson)', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)' }}>
+                    ⚠️ Super Admin has not configured any active bank accounts yet. Please request Super Admin config before paying.
+                  </div>
+                ) : (
+                  <select 
+                    value={paymentBankId} 
+                    onChange={e => setPaymentBankId(e.target.value)}
+                    required
+                    style={{
+                      padding: '0.75rem',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-light)',
+                      background: 'rgba(10, 10, 20, 0.5)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {adminBankAccounts.map(b => (
+                      <option key={b.id} value={b.id}>
+                        {b.bankName} - {b.accountNumber} ({b.accountHolder})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              
+              <div style={{ borderBottom: '1px solid var(--border-light)', margin: '0.5rem 0' }} />
+
+              {/* Card Inputs */}
+              <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', position: 'relative' }}>
+                <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Card Number</label>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <input 
+                    type="text" 
+                    placeholder="4000 1234 5678 9010" 
+                    value={cardNumber} 
+                    onChange={handleCardNumberChange} 
+                    required 
+                    style={{
+                      width: '100%',
+                      padding: '0.75rem',
+                      paddingRight: '4rem',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-light)',
+                      background: 'rgba(10, 10, 20, 0.5)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      fontSize: '1rem',
+                      letterSpacing: '1.5px'
+                    }}
+                  />
+                  {detectedBrand && (
+                    <span style={{
+                      position: 'absolute',
+                      right: '0.75rem',
+                      background: 'linear-gradient(135deg, #4f46e5, #06b6d4)',
+                      padding: '0.2rem 0.5rem',
+                      borderRadius: '4px',
+                      fontSize: '0.75rem',
+                      fontWeight: 'bold',
+                      color: 'white'
+                    }}>
+                      {detectedBrand}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Cardholder Name</label>
+                <input 
+                  type="text" 
+                  placeholder="John Doe" 
+                  value={cardHolder} 
+                  onChange={e => setCardHolder(e.target.value)} 
+                  required 
+                  style={{
+                    padding: '0.75rem',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-light)',
+                    background: 'rgba(10, 10, 20, 0.5)',
+                    color: 'var(--text-primary)',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <div className="form-group" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Expiry Date</label>
+                  <input 
+                    type="text" 
+                    placeholder="MM/YY" 
+                    value={cardExpiry} 
+                    onChange={handleExpiryChange} 
+                    required 
+                    style={{
+                      padding: '0.75rem',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-light)',
+                      background: 'rgba(10, 10, 20, 0.5)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      textAlign: 'center'
+                    }}
+                  />
+                </div>
+                
+                <div className="form-group" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>CVV / CVC</label>
+                  <input 
+                    type="password" 
+                    placeholder="***" 
+                    maxLength="3"
+                    value={cardCvv} 
+                    onChange={e => {
+                      const val = e.target.value.replace(/\D/g, '');
+                      setCardCvv(val);
+                    }} 
+                    required 
+                    style={{
+                      padding: '0.75rem',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-light)',
+                      background: 'rgba(10, 10, 20, 0.5)',
+                      color: 'var(--text-primary)',
+                      outline: 'none',
+                      textAlign: 'center',
+                      letterSpacing: '3px'
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <button 
+                  type="submit" 
+                  className="btn btn-success" 
+                  disabled={processingPayment || adminBankAccounts.length === 0} 
+                  style={{
+                    padding: '0.9rem',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    width: '100%',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}
+                >
+                  {processingPayment ? 'Processing Secure Transaction...' : '🔒 Confirm Secure Payment of Rs. 5,000'}
+                </button>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  onClick={() => setShowPaymentModal(false)}
+                  style={{ width: '100%', padding: '0.75rem' }}
+                >
+                  Cancel
+                </button>
+              </div>
+              
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

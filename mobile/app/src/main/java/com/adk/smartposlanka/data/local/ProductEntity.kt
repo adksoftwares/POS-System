@@ -12,5 +12,6 @@ data class ProductEntity(
     val price: Double,
     val quantity: Int,
     val barcode: String,
-    val category: String
+    val category: String,
+    val pendingSync: Boolean = false
 )

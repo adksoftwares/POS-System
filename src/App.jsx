@@ -5,13 +5,18 @@ import InventoryScreen from './components/InventoryScreen';
 import SettingsScreen from './components/SettingsScreen';
 import AnalyticsScreen from './components/AnalyticsScreen';
 import HrScreen from './components/HrScreen';
+import SupplierScreen from './components/SupplierScreen';
+import AdminDashboard from './components/AdminDashboard';
 import LoginScreen from './components/LoginScreen';
 import RegisterScreen from './components/RegisterScreen';
+import ErrorBoundary from './components/ErrorBoundary';
+import StandaloneCart from './components/StandaloneCart';
 import './App.css';
 
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './config/firebase';
+import { Toaster } from 'react-hot-toast';
 
 // Authentic Firebase Auth Guard protecting all routes and preventing zombie sessions
 const ProtectedRoute = ({ children }) => {
@@ -34,20 +39,24 @@ const ProtectedRoute = ({ children }) => {
         justifyContent: 'center',
         alignItems: 'center',
         height: '100vh',
-        backgroundColor: '#f1f5f9',
-        fontFamily: 'system-ui, sans-serif'
+        backgroundColor: 'var(--bg-primary)',
+        fontFamily: 'var(--font-sans)'
       }}>
         <div style={{
-          fontSize: '1.25rem',
-          fontWeight: 'bold',
-          color: '#1e293b',
-          marginBottom: '0.5rem'
+          fontSize: '1.5rem',
+          fontWeight: '700',
+          color: 'var(--text-primary)',
+          marginBottom: '0.5rem',
+          background: 'linear-gradient(90deg, var(--accent-primary), var(--accent-hover))',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
         }}>
           ADK Smart POS
         </div>
-        <div style={{ color: '#64748b', fontSize: '0.95rem' }}>
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
           Verifying secure cloud session...
         </div>
+        <div className="skeleton" style={{ marginTop: '2rem', height: '4px', width: '200px', borderRadius: '2px' }}></div>
       </div>
     );
   }
@@ -59,25 +68,36 @@ const ProtectedRoute = ({ children }) => {
 };
 
 function App() {
+
   return (
-    <HashRouter>
-      <Routes>
-        <Route path="/login" element={<LoginScreen />} />
-        <Route path="/register" element={<RegisterScreen />} />
-        
-        <Route path="/" element={
-          <ProtectedRoute>
-            <AppShell />
-          </ProtectedRoute>
-        }>
-          <Route index element={<PosScreen />} />
-          <Route path="inventory" element={<InventoryScreen />} />
-          <Route path="settings" element={<SettingsScreen />} />
-          <Route path="analytics" element={<AnalyticsScreen />} />
-          <Route path="hr" element={<HrScreen />} />
-        </Route>
-      </Routes>
-    </HashRouter>
+    <ErrorBoundary>
+      <Toaster position="top-right" toastOptions={{ style: { background: 'var(--bg-glass)', color: 'var(--text-primary)', backdropFilter: 'blur(10px)' } }} />
+      <HashRouter>
+        <Routes>
+          <Route path="/login" element={<LoginScreen />} />
+          <Route path="/register" element={<RegisterScreen />} />
+          <Route path="/cart-view" element={
+            <ProtectedRoute>
+              <StandaloneCart />
+            </ProtectedRoute>
+          } />
+          
+          <Route path="/" element={
+            <ProtectedRoute>
+              <AppShell />
+            </ProtectedRoute>
+          }>
+            <Route index element={<PosScreen />} />
+            <Route path="inventory" element={<InventoryScreen />} />
+            <Route path="suppliers" element={<SupplierScreen />} />
+            <Route path="settings" element={<SettingsScreen />} />
+            <Route path="analytics" element={<AnalyticsScreen />} />
+            <Route path="hr" element={<HrScreen />} />
+            <Route path="admin" element={<AdminDashboard />} />
+          </Route>
+        </Routes>
+      </HashRouter>
+    </ErrorBoundary>
   );
 }
 

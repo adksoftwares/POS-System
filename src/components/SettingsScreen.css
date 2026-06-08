@@ -79,19 +79,31 @@
 }
 
 .btn-secondary {
-  background-color: #95a5a6;
+  background-color: var(--text-secondary);
   color: white;
   border: none;
   padding: 0.75rem 1rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
   cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-secondary:hover {
+  background-color: var(--text-primary);
 }
 
 .btn-danger {
-  background-color: var(--tertiary-crimson);
+  background-color: var(--accent-danger);
   color: white;
   border: none;
   padding: 0.75rem 1rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
   cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-danger:hover {
+  opacity: 0.9;
 }

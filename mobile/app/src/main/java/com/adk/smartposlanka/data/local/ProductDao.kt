@@ -21,12 +21,32 @@ interface ProductDao {
     @Query("DELETE FROM products")
     suspend fun clearProducts()
 
+    @Query("SELECT * FROM products WHERE pendingSync = 1")
+    suspend fun getUnsyncedProducts(): List<ProductEntity>
+
+    @Query("UPDATE products SET pendingSync = 0 WHERE id = :productId")
+    suspend fun markAsSynced(productId: String)
+
+    @Query("SELECT * FROM products")
+    suspend fun getAllProductsSync(): List<ProductEntity>
+
     @Transaction
-    suspend fun refreshProducts(products: List<ProductEntity>) {
-        clearProducts()
-        insertProducts(products)
+    suspend fun refreshProducts(cloudProducts: List<ProductEntity>) {
+        val unsyncedIds = getUnsyncedProducts().map { it.id }.toSet()
+        val cloudIds = cloudProducts.map { it.id }.toSet()
+        val allLocal = getAllProductsSync()
+        for (local in allLocal) {
+            if (!cloudIds.contains(local.id) && !unsyncedIds.contains(local.id)) {
+                deleteProductById(local.id)
+            }
+        }
+        val toInsert = cloudProducts.filter { !unsyncedIds.contains(it.id) }
+        insertProducts(toInsert)
     }
     
-    @Query("UPDATE products SET quantity = quantity - :amount WHERE id = :productId")
+    @Query("UPDATE products SET quantity = quantity - :amount, pendingSync = 1 WHERE id = :productId")
     suspend fun deductStock(productId: String, amount: Int)
+
+    @Query("DELETE FROM products WHERE id = :productId")
+    suspend fun deleteProductById(productId: String)
 }

@@ -31,6 +31,20 @@ export function useSyncManager() {
               }, { merge: true });
             }
 
+            const oldOrgId = localStorage.getItem("adk_orgId");
+            if (oldOrgId && oldOrgId !== orgId) {
+              console.log(`⚠️ useSyncManager: Organization changed from ${oldOrgId} to ${orgId}. Clearing local Dexie cache...`);
+              try {
+                await db.products.clear();
+                await db.transactions.clear();
+                await db.attendance_logs.clear();
+                await db.suppliers.clear();
+                await db.purchase_orders.clear();
+              } catch (dbErr) {
+                console.error("Failed to clear local database cache on organization change:", dbErr);
+              }
+            }
+
             setSyncConfig({ orgId, branchId });
             localStorage.setItem("adk_orgId", orgId);
             localStorage.setItem("adk_branchId", branchId);
@@ -54,6 +68,20 @@ export function useSyncManager() {
               organizationId: orgId,
               branchId: branchId
             });
+
+            const oldOrgId = localStorage.getItem("adk_orgId");
+            if (oldOrgId && oldOrgId !== orgId) {
+              console.log(`⚠️ useSyncManager: Organization changed from ${oldOrgId} to ${orgId}. Clearing local Dexie cache...`);
+              try {
+                await db.products.clear();
+                await db.transactions.clear();
+                await db.attendance_logs.clear();
+                await db.suppliers.clear();
+                await db.purchase_orders.clear();
+              } catch (dbErr) {
+                console.error("Failed to clear local database cache on organization change:", dbErr);
+              }
+            }
 
             setSyncConfig({ orgId, branchId });
             localStorage.setItem("adk_role", "Owner");
@@ -84,9 +112,13 @@ export function useSyncManager() {
       try {
         // A. Push local Products
         const localProducts = await db.products.toArray();
-        for (const prod of localProducts) {
+        const unsyncedProducts = localProducts.filter(p => p.synced === false || p.synced === undefined);
+        for (const prod of unsyncedProducts) {
+          const cleanProd = { ...prod };
+          delete cleanProd.synced; // remove synced property before uploading to Firebase
           const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`, prod.id);
-          await setDoc(docRef, prod, { merge: true });
+          await setDoc(docRef, cleanProd, { merge: true });
+          await db.products.update(prod.id, { synced: true });
         }
 
         // B. Push local Transactions
@@ -94,6 +126,27 @@ export function useSyncManager() {
         for (const tx of localTransactions) {
           const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Transactions`, tx.receiptId);
           await setDoc(docRef, tx, { merge: true });
+        }
+
+        // C. Push local Suppliers
+        const localSuppliers = await db.suppliers.toArray();
+        for (const sup of localSuppliers) {
+          const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Suppliers`, sup.id);
+          await setDoc(docRef, sup, { merge: true });
+        }
+
+        // D. Push local Purchase Orders
+        const localPO = await db.purchase_orders.toArray();
+        for (const po of localPO) {
+          const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/PurchaseOrders`, po.id);
+          await setDoc(docRef, po, { merge: true });
+        }
+
+        // E. Push local Shifts (Attendance Logs)
+        const localShifts = await db.attendance_logs.toArray();
+        for (const shift of localShifts) {
+          const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Shifts`, shift.id);
+          await setDoc(docRef, shift, { merge: true });
         }
         console.log("🚀 Web Local changes successfully pushed to Cloud!");
       } catch (err) {
@@ -178,8 +231,24 @@ export function useSyncManager() {
         }
       }
 
-      if (cleanProducts.length > 0) {
-        await db.products.bulkPut(cleanProducts);
+      const cloudProductIds = new Set(cleanProducts.map(p => p.id));
+      const localProducts = await db.products.toArray();
+      for (const localProd of localProducts) {
+        if (!cloudProductIds.has(localProd.id) && localProd.synced === true) {
+          console.log(`🧹 useSyncManager: Deleting product "${localProd.name}" from local database (deleted in cloud)...`);
+          await db.products.delete(localProd.id);
+        }
+      }
+
+      const toPut = [];
+      for (const cp of cleanProducts) {
+        const lp = localProducts.find(p => p.id === cp.id);
+        if (!lp || lp.synced === true) {
+          toPut.push({ ...cp, synced: true });
+        }
+      }
+      if (toPut.length > 0) {
+        await db.products.bulkPut(toPut);
       }
     }, (error) => {
       console.error("Products subscription error:", error);
@@ -199,6 +268,48 @@ export function useSyncManager() {
       console.error("Transactions subscription error:", error);
     });
 
+    // C. Sync Suppliers
+    const suppliersRef = collection(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Suppliers`);
+    const unsubscribeSuppliers = onSnapshot(suppliersRef, async (snapshot) => {
+      const cloudSuppliers = [];
+      snapshot.forEach((doc) => {
+        cloudSuppliers.push({ id: doc.id, ...doc.data() });
+      });
+      if (cloudSuppliers.length > 0) {
+        await db.suppliers.bulkPut(cloudSuppliers);
+      }
+    }, (error) => {
+      console.error("Suppliers subscription error:", error);
+    });
+
+    // D. Sync Purchase Orders
+    const poRef = collection(dbCloud, `Organizations/${orgId}/Branches/${branchId}/PurchaseOrders`);
+    const unsubscribePO = onSnapshot(poRef, async (snapshot) => {
+      const cloudPO = [];
+      snapshot.forEach((doc) => {
+        cloudPO.push({ id: doc.id, ...doc.data() });
+      });
+      if (cloudPO.length > 0) {
+        await db.purchase_orders.bulkPut(cloudPO);
+      }
+    }, (error) => {
+      console.error("Purchase Orders subscription error:", error);
+    });
+
+    // E. Sync Attendance Logs (Shifts)
+    const shiftsRef = collection(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Shifts`);
+    const unsubscribeShifts = onSnapshot(shiftsRef, async (snapshot) => {
+      const cloudShifts = [];
+      snapshot.forEach((doc) => {
+        cloudShifts.push({ id: doc.id, ...doc.data() });
+      });
+      if (cloudShifts.length > 0) {
+        await db.attendance_logs.bulkPut(cloudShifts);
+      }
+    }, (error) => {
+      console.error("Shifts subscription error:", error);
+    });
+
     // Handle online recovery event
     window.addEventListener('online', pushLocalToCloud);
 
@@ -206,6 +317,9 @@ export function useSyncManager() {
       clearInterval(pushInterval);
       unsubscribeProducts();
       unsubscribeTransactions();
+      unsubscribeSuppliers();
+      unsubscribePO();
+      unsubscribeShifts();
       window.removeEventListener('online', pushLocalToCloud);
     };
   }, [syncConfig]);

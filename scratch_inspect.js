@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, getDocs, collectionGroup } from "firebase/firestore";
 import dotenv from "dotenv";
