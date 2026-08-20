@@ -54,7 +54,7 @@ export default function Cart({ cartItems, onRemove, onHoldBill, onRestoreCart, o
   };
 
   const handleConfirmPayment = () => {
-    onCheckout(paymentMethod, paymentMethod === 'Bank Transfer' ? selectedBankId : null);
+    onCheckout(paymentMethod, paymentMethod === 'Bank Transfer' ? selectedBankId : null, cashTendered);
     setShowPaymentModal(false);
     setPaymentMethod('Cash');
     setCashTendered('');
