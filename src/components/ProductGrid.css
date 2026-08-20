@@ -12,11 +12,12 @@
   padding: 0.6rem 0.25rem 0.85rem 0.25rem;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
-  scrollbar-width: thin;
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
 }
 
 .category-tabs::-webkit-scrollbar {
-  display: none;
+  display: none; /* Chrome, Safari and Opera */
 }
 
 .product-card {

@@ -536,8 +536,8 @@ export default function PosScreen() {
   return (
     <div className="pos-layout animate-fade-in" style={{ height: '100%', padding: '1rem' }}>
       <div className="product-area">
-        {/* Cashier Action Bar - 1 Single Line */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'nowrap', marginBottom: '0.75rem', overflowX: 'auto' }}>
+        {/* Cashier Action Bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem', flexShrink: 0 }}>
           <button 
             className={`btn ${clockedIn ? 'btn-danger' : 'btn-primary'}`} 
             onClick={handlePunchClock}
