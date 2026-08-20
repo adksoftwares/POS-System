@@ -39,6 +39,7 @@ export default function SettingsScreen() {
   const [tier, setTier] = useState('Free');
   const [licenseKey, setLicenseKey] = useState('');
   const [loading, setLoading] = useState(false);
+  const [premiumExpiryDate, setPremiumExpiryDate] = useState(null);
 
   // Change Password state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -97,6 +98,9 @@ export default function SettingsScreen() {
           setAddress(data.address || '');
           setPhone(data.phone || '');
           setTier(data.subscriptionTier || 'Free');
+          if (data.premium_expiry_date) {
+            setPremiumExpiryDate(data.premium_expiry_date);
+          }
         }
       } catch (err) {
         console.log("Offline mode, using cached settings if any.", err);
@@ -105,10 +109,9 @@ export default function SettingsScreen() {
     fetchOrg();
   }, [orgId]);
 
-  // Load Admin Bank Accounts
+  // Load Bank Accounts
   useEffect(() => {
     async function fetchBankAccounts() {
-      if (!isSuperAdmin) return;
       try {
         const snap = await getDocs(collection(dbCloud, "BankAccounts"));
         const list = [];
@@ -133,6 +136,16 @@ export default function SettingsScreen() {
         address,
         phone
       });
+      window.dispatchEvent(new CustomEvent('shopDetailsUpdated', { detail: { shopName } }));
+      
+      try {
+        const channel = new BroadcastChannel('adk_settings_sync');
+        channel.postMessage({ type: 'SHOP_DETAILS_UPDATED', shopName });
+        channel.close();
+      } catch (e) {
+        console.warn("Could not broadcast shop details update", e);
+      }
+
       showStatus("Shop details updated successfully!", "success");
     } catch (err) {
       console.error(err);
@@ -469,11 +482,7 @@ export default function SettingsScreen() {
     try {
       await signOut(auth);
       try {
-        await db.products.clear();
-        await db.transactions.clear();
-        await db.attendance_logs.clear();
-        await db.suppliers.clear();
-        await db.purchase_orders.clear();
+        await Promise.all(db.tables.map(table => table.clear()));
       } catch (dbErr) {
         console.error("Error clearing Dexie tables on logout:", dbErr);
       }
@@ -489,17 +498,23 @@ export default function SettingsScreen() {
   return (
     <div className="settings-layout">
       <div className="settings-header">
-        <h2>Settings & Account Profile</h2>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <h2 style={{ fontSize: '1.2rem', fontWeight: '700', color: '#0f172a', margin: 0 }}>Settings & Account Profile</h2>
+        <div style={{ display: 'flex', gap: '0.4rem' }}>
           <button 
             className="btn btn-success" 
             onClick={handleForceSync} 
             disabled={syncing}
-            style={{ border: 'none' }}
+            style={{ padding: '0.35rem 0.75rem', borderRadius: '4px', fontSize: '0.78rem', fontWeight: '700' }}
           >
             {syncing ? 'Syncing...' : 'Force Cloud Sync'}
           </button>
-          <button className="btn btn-danger" onClick={handleLogout}>Logout</button>
+          <button 
+            className="btn btn-danger" 
+            onClick={handleLogout}
+            style={{ padding: '0.35rem 0.75rem', borderRadius: '4px', fontSize: '0.78rem', fontWeight: '600' }}
+          >
+            Logout
+          </button>
         </div>
       </div>
 
@@ -577,10 +592,10 @@ export default function SettingsScreen() {
           </form>
         </div>
 
-        {/* Configure Bank Accounts (Super Admin Only) */}
-        {isSuperAdmin && (
-          <div className="settings-card">
-            <h3>Configure Bank Accounts (Admin Only)</h3>
+        {/* Bank Accounts */}
+        <div className="settings-card">
+          <h3>{isSuperAdmin ? 'Configure Bank Accounts (Admin Only)' : 'Active Bank Accounts'}</h3>
+          {isSuperAdmin && (
             <form onSubmit={handleAddBankAccount}>
               <div className="form-group">
                 <label>Bank Name</label>
@@ -620,8 +635,9 @@ export default function SettingsScreen() {
               </div>
               <button type="submit" className="btn btn-primary" disabled={bankLoading}>Add Account</button>
             </form>
-            
-            <h4 style={{ marginTop: '1.5rem', marginBottom: '0.75rem' }}>Active Accounts</h4>
+          )}
+          
+          <h4 style={{ marginTop: isSuperAdmin ? '1.5rem' : '0.5rem', marginBottom: '0.75rem' }}>Active Accounts</h4>
             <ul style={{ listStyle: 'none', padding: 0 }}>
               {bankAccountsList.map(b => (
                 <li 
@@ -636,27 +652,28 @@ export default function SettingsScreen() {
                     <strong>{b.bankName}</strong><br />
                     <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{b.accountNumber} ({b.accountHolder})</span>
                   </div>
-                  <button 
-                    className="btn btn-danger" 
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }} 
-                    onClick={() => handleDeleteBankAccount(b.id)}
-                  >
-                    Delete
-                  </button>
+                  {isSuperAdmin && (
+                    <button 
+                      className="btn btn-danger" 
+                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.8rem' }} 
+                      onClick={() => handleDeleteBankAccount(b.id)}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </li>
               ))}
               {bankAccountsList.length === 0 && (
                 <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>No accounts configured.</span>
               )}
             </ul>
-          </div>
-        )}
+        </div>
 
         {/* Subscription & Billing Card (Admin/Owner Only) */}
         {role !== 'Cashier' && (
           <div className="settings-card subscription-card">
             <h3>Subscription & Billing</h3>
-            <div className="tier-info" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+            <div className="tier-info" style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', marginBottom: '1rem' }}>
               <p>Current Tier: <strong className={`tier-badge tier-${tier.toLowerCase()}`} style={{
                 padding: '0.25rem 0.50rem',
                 borderRadius: '6px',
@@ -666,263 +683,29 @@ export default function SettingsScreen() {
                 marginLeft: '0.5rem',
                 display: 'inline-block'
               }}>{tier}</strong></p>
+              
               <p>Status: <span style={{ color: tier === 'Premium' ? 'var(--secondary-emerald)' : 'var(--text-muted)', fontWeight: 'bold' }}>{tier === 'Premium' ? 'Active Premium' : 'Free Tier (50 Bill Limit)'}</span></p>
+
+              {tier === 'Premium' && premiumExpiryDate && (
+                <>
+                  <p>Expiry Date: <span style={{ fontWeight: 'bold' }}>{new Date(premiumExpiryDate).toLocaleDateString()}</span></p>
+                  <p>Remaining: <span style={{ fontWeight: 'bold', color: 'var(--accent-primary)' }}>
+                    {Math.ceil((new Date(premiumExpiryDate) - new Date()) / (1000 * 60 * 60 * 24))} Days
+                  </span></p>
+                </>
+              )}
             </div>
-            <hr style={{ border: 'none', borderBottom: '1px solid var(--border-light)', margin: '1rem 0' }} />
-            <form onSubmit={handleApplyLicense} className="license-form" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Apply Upgrade Key</label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <input 
-                  type="text" 
-                  placeholder="Enter ADK License Key" 
-                  value={licenseKey} 
-                  onChange={e => setLicenseKey(e.target.value)} 
-                  required 
-                  style={{
-                    flex: 1,
-                    padding: '0.6rem',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border-light)',
-                    background: 'var(--bg-glass)',
-                    color: 'var(--text-primary)',
-                    outline: 'none'
-                  }}
-                />
-                <button type="submit" className="btn btn-success" disabled={loading} style={{ padding: '0.6rem 1.2rem' }}>
-                  {loading ? 'Applying...' : 'Apply Key'}
-                </button>
-              </div>
-            </form>
             
             {tier !== 'Premium' && (
               <div style={{ marginTop: '1.5rem' }}>
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem', lineHeight: '1.4' }}>
-                  Don't have a license key? Purchase a Premium Key instantly using your Visa, MasterCard, or UnionPay credit/debit card.
+                  To upgrade to Premium and unlock unlimited bills, please contact the Super Admin or Sales team.
                 </div>
-                <button 
-                  type="button" 
-                  className="btn btn-primary" 
-                  onClick={() => setShowPaymentModal(true)} 
-                  style={{ width: '100%', padding: '0.75rem', fontWeight: 'bold', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}
-                >
-                  💳 Pay Premium Subscription (Rs. 5,000)
-                </button>
               </div>
             )}
           </div>
         )}
       </div>
-
-      {/* Premium Subscription Payment Modal */}
-      {showPaymentModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          background: 'rgba(0, 0, 0, 0.7)',
-          backdropFilter: 'blur(8px)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 9999,
-          padding: '1rem',
-          color: 'var(--text-primary)'
-        }}>
-          <div className="glass-panel animate-scale-in" style={{
-            width: '100%',
-            maxWidth: '500px',
-            padding: '2rem',
-            borderRadius: '20px',
-            background: 'rgba(20, 24, 40, 0.95)',
-            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            maxHeight: '90vh',
-            overflowY: 'auto'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1.4rem', fontWeight: '800', background: 'linear-gradient(90deg, #818cf8, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                💳 Pay Premium - Rs. 5,000 / Mo
-              </h3>
-              <button 
-                onClick={() => setShowPaymentModal(false)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '1.5rem', cursor: 'pointer' }}
-              >&times;</button>
-            </div>
-            
-            <form onSubmit={handleProcessPayment} style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
-              
-              {/* Select Bank Account */}
-              <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Select Super Admin Bank Account</label>
-                {adminBankAccounts.length === 0 ? (
-                  <div style={{ color: 'var(--tertiary-crimson)', fontSize: '0.85rem', padding: '0.5rem', border: '1px dashed var(--tertiary-crimson)', borderRadius: '8px', background: 'rgba(239, 68, 68, 0.1)' }}>
-                    ⚠️ Super Admin has not configured any active bank accounts yet. Please request Super Admin config before paying.
-                  </div>
-                ) : (
-                  <select 
-                    value={paymentBankId} 
-                    onChange={e => setPaymentBankId(e.target.value)}
-                    required
-                    style={{
-                      padding: '0.75rem',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border-light)',
-                      background: 'rgba(10, 10, 20, 0.5)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {adminBankAccounts.map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.bankName} - {b.accountNumber} ({b.accountHolder})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-              
-              <div style={{ borderBottom: '1px solid var(--border-light)', margin: '0.5rem 0' }} />
-
-              {/* Card Inputs */}
-              <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', position: 'relative' }}>
-                <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Card Number</label>
-                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                  <input 
-                    type="text" 
-                    placeholder="4000 1234 5678 9010" 
-                    value={cardNumber} 
-                    onChange={handleCardNumberChange} 
-                    required 
-                    style={{
-                      width: '100%',
-                      padding: '0.75rem',
-                      paddingRight: '4rem',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border-light)',
-                      background: 'rgba(10, 10, 20, 0.5)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                      fontSize: '1rem',
-                      letterSpacing: '1.5px'
-                    }}
-                  />
-                  {detectedBrand && (
-                    <span style={{
-                      position: 'absolute',
-                      right: '0.75rem',
-                      background: 'linear-gradient(135deg, #4f46e5, #06b6d4)',
-                      padding: '0.2rem 0.5rem',
-                      borderRadius: '4px',
-                      fontSize: '0.75rem',
-                      fontWeight: 'bold',
-                      color: 'white'
-                    }}>
-                      {detectedBrand}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Cardholder Name</label>
-                <input 
-                  type="text" 
-                  placeholder="John Doe" 
-                  value={cardHolder} 
-                  onChange={e => setCardHolder(e.target.value)} 
-                  required 
-                  style={{
-                    padding: '0.75rem',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border-light)',
-                    background: 'rgba(10, 10, 20, 0.5)',
-                    color: 'var(--text-primary)',
-                    outline: 'none'
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <div className="form-group" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>Expiry Date</label>
-                  <input 
-                    type="text" 
-                    placeholder="MM/YY" 
-                    value={cardExpiry} 
-                    onChange={handleExpiryChange} 
-                    required 
-                    style={{
-                      padding: '0.75rem',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border-light)',
-                      background: 'rgba(10, 10, 20, 0.5)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                      textAlign: 'center'
-                    }}
-                  />
-                </div>
-                
-                <div className="form-group" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <label style={{ fontWeight: '600', fontSize: '0.9rem' }}>CVV / CVC</label>
-                  <input 
-                    type="password" 
-                    placeholder="***" 
-                    maxLength="3"
-                    value={cardCvv} 
-                    onChange={e => {
-                      const val = e.target.value.replace(/\D/g, '');
-                      setCardCvv(val);
-                    }} 
-                    required 
-                    style={{
-                      padding: '0.75rem',
-                      borderRadius: '8px',
-                      border: '1px solid var(--border-light)',
-                      background: 'rgba(10, 10, 20, 0.5)',
-                      color: 'var(--text-primary)',
-                      outline: 'none',
-                      textAlign: 'center',
-                      letterSpacing: '3px'
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <button 
-                  type="submit" 
-                  className="btn btn-success" 
-                  disabled={processingPayment || adminBankAccounts.length === 0} 
-                  style={{
-                    padding: '0.9rem',
-                    fontSize: '1rem',
-                    fontWeight: 'bold',
-                    width: '100%',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center'
-                  }}
-                >
-                  {processingPayment ? 'Processing Secure Transaction...' : '🔒 Confirm Secure Payment of Rs. 5,000'}
-                </button>
-                <button 
-                  type="button" 
-                  className="btn btn-secondary" 
-                  onClick={() => setShowPaymentModal(false)}
-                  style={{ width: '100%', padding: '0.75rem' }}
-                >
-                  Cancel
-                </button>
-              </div>
-              
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

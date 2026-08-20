@@ -5,7 +5,6 @@ import InventoryScreen from './components/InventoryScreen';
 import SettingsScreen from './components/SettingsScreen';
 import AnalyticsScreen from './components/AnalyticsScreen';
 import HrScreen from './components/HrScreen';
-import SupplierScreen from './components/SupplierScreen';
 import AdminDashboard from './components/AdminDashboard';
 import LoginScreen from './components/LoginScreen';
 import RegisterScreen from './components/RegisterScreen';
@@ -89,7 +88,6 @@ function App() {
           }>
             <Route index element={<PosScreen />} />
             <Route path="inventory" element={<InventoryScreen />} />
-            <Route path="suppliers" element={<SupplierScreen />} />
             <Route path="settings" element={<SettingsScreen />} />
             <Route path="analytics" element={<AnalyticsScreen />} />
             <Route path="hr" element={<HrScreen />} />

@@ -4,14 +4,19 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function isAdmin() {
       return request.auth != null && (
-        request.auth.token.email == 'arikarran14@gmail.com' ||
-        get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.role == 'admin'
+        (request.auth.token.email != null && request.auth.token.email == 'arikarran14@gmail.com') ||
+        (exists(/databases/$(database)/documents/Users/$(request.auth.uid)) && get(/databases/$(database)/documents/Users/$(request.auth.uid)).data.role == 'admin')
       );
     }
 
     // Top level Organizations collection
     match /Organizations/{orgId} {
-      allow read, write: if request.auth != null;
+      allow read, create: if request.auth != null;
+      allow update: if request.auth != null && (
+        isAdmin() ||
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['premium_status', 'premium_start_date', 'premium_expiry_date', 'subscriptionTier']))
+      );
+      allow delete: if isAdmin();
       
       match /{document=**} {
         allow read, write: if request.auth != null;
@@ -34,21 +39,9 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
-    // Top level LicenseKeys collection
-    match /LicenseKeys/{keyId} {
-      allow read: if request.auth != null && (
-        isAdmin() || 
-        resource.data.email == request.auth.token.email
-      );
-      allow create: if request.auth != null && (
-        isAdmin() || 
-        request.resource.data.email == request.auth.token.email
-      );
-      allow update: if request.auth != null && (
-        isAdmin() || 
-        resource.data.email == request.auth.token.email
-      );
-      allow delete: if isAdmin();
+    // Top level PremiumHistory collection
+    match /PremiumHistory/{historyId} {
+      allow read, write: if isAdmin();
     }
 
     // Top level Payments collection

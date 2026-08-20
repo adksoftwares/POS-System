@@ -26,48 +26,42 @@ export default function HrScreen() {
   }, [logs, now]);
 
   return (
-    <div className="analytics-layout animate-fade-in" style={{ padding: '2rem', height: '100%', overflowY: 'auto' }}>
-      <h2 style={{ marginBottom: '2rem', background: 'linear-gradient(90deg, var(--accent-primary), var(--accent-hover))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: '0 0 2rem 0', fontSize: '2rem' }}>
-        HR Analytics & Timesheets
+    <div className="analytics-layout animate-fade-in" style={{ padding: '1rem', height: '100%', overflowY: 'auto' }}>
+      <h2 style={{ marginBottom: '1.5rem', fontSize: '1.8rem' }}>
+        HR Staff Timesheets & Shift Reconciliation
       </h2>
       
-      <div className="charts-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', marginBottom: '2rem' }}>
-        <div className="chart-container glass-panel">
-          <h3 style={{ margin: '0 0 1rem 0', color: 'var(--text-primary)' }}>Total Hours Worked by Employee</h3>
-          <div style={{ height: '300px', width: '100%' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', marginBottom: '1.5rem' }}>
+        <div className="glass-panel" style={{ padding: '1.5rem' }}>
+          <h3 style={{ marginBottom: '1rem' }}>Employee Work Hours Log</h3>
+          <div style={{ height: '260px', width: '100%' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" vertical={false} />
-                <XAxis dataKey="name" stroke="var(--text-muted)" />
-                <YAxis stroke="var(--text-muted)" />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-light)', borderRadius: '8px' }}
-                  cursor={{ fill: 'var(--border-light)' }}
-                  formatter={(value) => [`${value} hrs`, 'Hours Worked']}
-                />
-                <Bar dataKey="hours" fill="var(--accent-primary)" radius={[4, 4, 0, 0]} barSize={40} />
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-light)" />
+                <XAxis dataKey="name" stroke="var(--text-secondary)" />
+                <YAxis stroke="var(--text-secondary)" />
+                <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
+                <Bar dataKey="hours" fill="var(--accent-cyan)" radius={[4, 4, 0, 0]} barSize={36} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
       </div>
 
-      <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '1.5rem' }}>
-        <h3 style={{ margin: '0 0 1.25rem 0', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          Timesheet & Cash Drawer Reconciliation Log
-        </h3>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', color: 'var(--text-primary)', fontSize: '0.9rem' }}>
+      <div className="glass-panel" style={{ padding: '1.5rem' }}>
+        <h3 style={{ marginBottom: '1rem' }}>Shift Cash Drawer Float Audit (Z-Report Audit)</h3>
+        <div className="table-responsive">
+          <table className="premium-table">
             <thead>
-              <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
-                <th style={{ padding: '1rem' }}>Employee</th>
-                <th style={{ padding: '1rem' }}>Shift Start / End</th>
-                <th style={{ padding: '1rem' }}>Starting Float</th>
-                <th style={{ padding: '1rem' }}>Cash Sales</th>
-                <th style={{ padding: '1rem' }}>Expected Ending</th>
-                <th style={{ padding: '1rem' }}>Actual Drawer</th>
-                <th style={{ padding: '1rem' }}>Discrepancy</th>
-                <th style={{ padding: '1rem' }}>Status</th>
+              <tr>
+                <th>Cashier</th>
+                <th>Shift Window</th>
+                <th>Starting Float</th>
+                <th>Cash Sales</th>
+                <th>Expected Cash</th>
+                <th>Actual Drawer</th>
+                <th>Discrepancy</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -81,58 +75,45 @@ export default function HrScreen() {
                 const actual = log.endingFloat !== undefined ? log.endingFloat : 0;
                 const discrepancy = log.discrepancy !== undefined ? log.discrepancy : 0;
 
-                // Color code the discrepancy badge
-                let discrepancyColor = 'var(--text-primary)';
-                let discrepancyBg = 'transparent';
                 let statusText = 'Working...';
-                let statusStyle = { background: 'rgba(245, 158, 11, 0.15)', color: 'var(--accent-warning)', padding: '0.25rem 0.5rem', borderRadius: '4px', fontWeight: 'bold' };
+                let statusBg = 'rgba(251, 191, 36, 0.15)';
+                let statusColor = 'var(--accent-warning)';
 
                 if (log.clockOut) {
                   if (discrepancy === 0) {
-                    discrepancyColor = 'var(--accent-success)';
-                    discrepancyBg = 'rgba(16, 185, 129, 0.1)';
                     statusText = 'Balanced';
-                    statusStyle = { background: 'rgba(16, 185, 129, 0.15)', color: 'var(--accent-success)', padding: '0.25rem 0.5rem', borderRadius: '4px', fontWeight: 'bold' };
+                    statusBg = 'rgba(16, 185, 129, 0.15)';
+                    statusColor = 'var(--accent-success)';
                   } else if (discrepancy < 0) {
-                    discrepancyColor = 'var(--accent-danger)';
-                    discrepancyBg = 'rgba(244, 63, 94, 0.1)';
                     statusText = 'Shortage';
-                    statusStyle = { background: 'rgba(244, 63, 94, 0.15)', color: 'var(--accent-danger)', padding: '0.25rem 0.5rem', borderRadius: '4px', fontWeight: 'bold' };
+                    statusBg = 'rgba(244, 63, 94, 0.15)';
+                    statusColor = 'var(--accent-danger)';
                   } else {
-                    discrepancyColor = 'var(--accent-warning)';
-                    discrepancyBg = 'rgba(251, 191, 36, 0.1)';
                     statusText = 'Overage';
-                    statusStyle = { background: 'rgba(251, 191, 36, 0.15)', color: 'var(--accent-warning)', padding: '0.25rem 0.5rem', borderRadius: '4px', fontWeight: 'bold' };
+                    statusBg = 'rgba(251, 191, 36, 0.15)';
+                    statusColor = 'var(--accent-warning)';
                   }
                 }
 
                 return (
-                  <tr key={log.id} style={{ borderBottom: '1px solid var(--border-light)', transition: 'background-color var(--transition-fast)' }} className="table-row-hover">
-                    <td style={{ padding: '1rem', fontWeight: '600' }}>
+                  <tr key={log.id}>
+                    <td style={{ fontWeight: '600' }}>
                       {log.employeeId.split('@')[0]}
-                      <span style={{ display: 'block', fontSize: '0.75rem', fontWeight: 'normal', color: 'var(--text-secondary)' }}>{log.employeeId}</span>
                     </td>
-                    <td style={{ padding: '1rem' }}>
-                      <span style={{ fontWeight: '500' }}>{inDate}</span>
-                      <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>to {outDate}</span>
+                    <td style={{ fontSize: '0.82rem' }}>
+                      {inDate} to {outDate}
                     </td>
-                    <td style={{ padding: '1rem' }}>Rs. {startFloat.toFixed(2)}</td>
-                    <td style={{ padding: '1rem' }}>Rs. {cashSales.toFixed(2)}</td>
-                    <td style={{ padding: '1rem' }}>Rs. {expected.toFixed(2)}</td>
-                    <td style={{ padding: '1rem', fontWeight: log.clockOut ? '600' : 'normal' }}>
-                      {log.clockOut ? `Rs. ${actual.toFixed(2)}` : '—'}
+                    <td className="price-mono">Rs. {startFloat.toFixed(2)}</td>
+                    <td className="price-mono">Rs. {cashSales.toFixed(2)}</td>
+                    <td className="price-mono">Rs. {expected.toFixed(2)}</td>
+                    <td className="price-mono">{log.clockOut ? `Rs. ${actual.toFixed(2)}` : '—'}</td>
+                    <td className="price-mono" style={{ color: discrepancy < 0 ? 'var(--accent-danger)' : (discrepancy > 0 ? 'var(--accent-warning)' : 'var(--accent-success)') }}>
+                      {log.clockOut ? `Rs. ${discrepancy.toFixed(2)}` : '—'}
                     </td>
-                    <td style={{ padding: '1rem' }}>
-                      {log.clockOut ? (
-                        <span style={{ color: discrepancyColor, background: discrepancyBg, padding: '0.25rem 0.5rem', borderRadius: '4px', fontWeight: 'bold' }}>
-                          Rs. {discrepancy.toFixed(2)}
-                        </span>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                    <td style={{ padding: '1rem' }}>
-                      <span style={statusStyle}>{statusText}</span>
+                    <td>
+                      <span style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.78rem', fontWeight: 'bold', background: statusBg, color: statusColor }}>
+                        {statusText}
+                      </span>
                     </td>
                   </tr>
                 );

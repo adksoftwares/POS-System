@@ -1,0 +1,10 @@
+{
+  "appId": "com.adk.smartposlanka",
+  "appName": "ADKSmartPOS",
+  "webDir": "dist",
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": true
+    }
+  }
+}

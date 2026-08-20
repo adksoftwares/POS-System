@@ -1,7 +1,12 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
+const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
+
+// Configure auto-updater
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
 
 let win;
 
@@ -38,6 +43,11 @@ function createWindow() {
     // win.webContents.openDevTools();
   } else {
     win.loadFile(path.join(__dirname, '../dist/index.html'));
+    
+    // Check for updates after the app is loaded
+    win.webContents.once('did-finish-load', () => {
+      autoUpdater.checkForUpdatesAndNotify();
+    });
   }
 }
 

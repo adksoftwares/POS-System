@@ -2,19 +2,19 @@ import { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/database';
 import { v4 as uuidv4 } from 'uuid';
-import { Trash2, Edit, Camera, Plus, Check, X } from 'lucide-react';
+import { Trash2, Edit, Camera, Plus, Download, AlertTriangle } from 'lucide-react';
 import Papa from 'papaparse';
 import BarcodeCameraScanner from './BarcodeCameraScanner';
 import { dbCloud } from '../config/firebase';
-import { collection, getDocs, doc, setDoc, writeBatch, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { sound } from '../services/soundService';
 import './InventoryScreen.css';
 
 export default function InventoryScreen() {
-  // Sort products alphabetically by name
   const products = useLiveQuery(() => db.products.orderBy('name').toArray(), []);
-  const [suggestions, setSuggestions] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [statusMsg, setStatusMsg] = useState({ text: '', type: '' });
+  const [filterLowStock, setFilterLowStock] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -66,7 +66,6 @@ export default function InventoryScreen() {
         }
         if (toPut.length > 0) {
           await db.products.bulkPut(toPut);
-          console.log("✅ Offline database updated with latest Firebase data!");
         }
       } catch (error) {
         console.error("Failed to sync from cloud", error);
@@ -80,24 +79,8 @@ export default function InventoryScreen() {
     setFormData({ ...formData, [name]: value });
 
     if (name === 'name' && !editingId) {
-      if (value.length > 1) {
-        const matches = await db.products.where('name').startsWithIgnoreCase(value).toArray();
-        setSuggestions(matches);
-      } else {
-        setSuggestions([]);
-      }
+      // Input handler
     }
-  };
-
-  const selectSuggestion = (prod) => {
-    setFormData({
-      name: prod.name,
-      price: prod.price,
-      quantity: prod.quantity,
-      barcode: prod.barcode,
-      category: prod.category
-    });
-    setSuggestions([]);
   };
 
   const handleStartEdit = (prod) => {
@@ -109,13 +92,12 @@ export default function InventoryScreen() {
       barcode: prod.barcode || '',
       category: prod.category || 'General'
     });
-    showStatus(`Editing Mode: Loaded details for "${prod.name}"`, 'info');
+    showStatus(`Editing Mode: Loaded "${prod.name}"`, 'info');
   };
 
   const handleCancelEdit = () => {
     setEditingId(null);
     setFormData({ name: '', price: '', quantity: '', barcode: '', category: 'General' });
-    setSuggestions([]);
   };
 
   const handleAddProduct = async (e) => {
@@ -148,31 +130,8 @@ export default function InventoryScreen() {
 
       setEditingId(null);
       setFormData({ name: '', price: '', quantity: '', barcode: '', category: 'General' });
-      setSuggestions([]);
+      sound.playSuccessChime();
       showStatus("Product updated successfully!");
-      return;
-    }
-    
-    const existing = await db.products.where('name').equalsIgnoreCase(formData.name).first();
-    if (existing) {
-      const newQty = parseInt(existing.quantity) + parseInt(formData.quantity);
-      await db.products.update(existing.id, {
-        quantity: newQty,
-        synced: false
-      });
-      
-      if (navigator.onLine && orgId && branchId) {
-        try {
-          const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`, existing.id);
-          await setDoc(docRef, { quantity: newQty }, { merge: true });
-        } catch (err) {
-          console.error("Cloud update failed:", err);
-        }
-      }
-
-      setFormData({ name: '', price: '', quantity: '', barcode: '', category: 'General' });
-      setSuggestions([]);
-      showStatus(`Existing product "${existing.name}" found. Quantity merged successfully!`, 'info');
       return;
     }
 
@@ -188,7 +147,6 @@ export default function InventoryScreen() {
 
     await db.products.add(newProd);
 
-    // Push to cloud instantly if online
     if (navigator.onLine && orgId && branchId) {
       try {
         const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`, newProd.id);
@@ -199,128 +157,113 @@ export default function InventoryScreen() {
     }
 
     setFormData({ name: '', price: '', quantity: '', barcode: '', category: 'General' });
-    setSuggestions([]);
+    sound.playSuccessChime();
     showStatus("Product added successfully!");
   };
 
-  const handleFileUpload = (e) => {
+  const handleExportCSV = () => {
+    if (!products || products.length === 0) return;
+    const csv = Papa.unparse(products.map(p => ({
+      ID: p.id,
+      Name: p.name,
+      Price: p.price,
+      Quantity: p.quantity,
+      Barcode: p.barcode,
+      Category: p.category
+    })));
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `Inventory_Export_${Date.now()}.csv`;
+    link.click();
+    sound.playSuccessChime();
+  };
+
+  const handleImportCSV = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
+      transformHeader: (header) => header.trim(),
       complete: async (results) => {
-        const parsedData = results.data;
-        let count = 0;
-        
-        const orgId = localStorage.getItem("adk_orgId");
-        const branchId = localStorage.getItem("adk_branchId");
-        
-        let batch = writeBatch(dbCloud);
-        let batchCount = 0;
+        try {
+          const existingProducts = await db.products.toArray();
+          const parsedProducts = [];
+          const orgId = localStorage.getItem("adk_orgId");
+          const branchId = localStorage.getItem("adk_branchId");
+          let updatedCount = 0;
+          let addedCount = 0;
 
-        // Normalization helper for case-insensitive headers & aliases
-        const normalizeRow = (row) => {
-          const clean = {};
-          for (const key of Object.keys(row)) {
-            clean[key.toLowerCase().trim()] = row[key];
+          for (const row of results.data) {
+            const name = row.Name || row.name;
+            if (!name) continue; 
+            
+            const rowId = row.ID || row.id;
+            const rowQty = parseInt(row.Quantity || row.quantity) || 0;
+            const rowPrice = parseFloat(row.Price || row.price);
+            
+            // Check if product already exists by ID or exact Name
+            const existing = existingProducts.find(p => (rowId && p.id === rowId) || p.name.toLowerCase() === name.trim().toLowerCase());
+
+            if (existing) {
+              // Increase stock count
+              existing.quantity += rowQty;
+              // Update other fields if provided in CSV
+              if (rowPrice > 0) existing.price = rowPrice;
+              if (row.Barcode || row.barcode) existing.barcode = row.Barcode || row.barcode;
+              if (row.Category || row.category) existing.category = row.Category || row.category;
+              existing.updatedAt = new Date().toISOString();
+              
+              parsedProducts.push(existing);
+              updatedCount++;
+            } else {
+              // Create new product
+              const newProd = {
+                id: rowId || uuidv4(),
+                name: name.trim(),
+                price: rowPrice || 0,
+                quantity: rowQty,
+                barcode: row.Barcode || row.barcode || '',
+                category: row.Category || row.category || 'General',
+                updatedAt: new Date().toISOString()
+              };
+              parsedProducts.push(newProd);
+              addedCount++;
+            }
           }
 
-          const getValue = (keys) => {
-            for (const k of keys) {
-              if (clean[k] !== undefined) return clean[k];
-            }
-            for (const key of Object.keys(clean)) {
-              for (const k of keys) {
-                if (key.includes(k)) return clean[key];
+          if (parsedProducts.length > 0) {
+            await db.products.bulkPut(parsedProducts);
+            if (navigator.onLine && orgId && branchId) {
+              for (const prod of parsedProducts) {
+                const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`, prod.id);
+                setDoc(docRef, prod).catch(e => console.warn('Cloud sync delayed', e));
               }
             }
-            return undefined;
-          };
-
-          const nameVal = getValue(['name', 'product name', 'product_name', 'product', 'item name', 'item_name', 'item', 'title']);
-          const priceVal = getValue(['price', 'rate', 'cost', 'amount', 'amout', 'selling price', 'sell price', 'mrp']);
-          const qtyVal = getValue(['quantity', 'stock', 'qty', 'count', 'units']);
-          const barcodeVal = getValue(['barcode', 'code', 'bar code', 'upc', 'ean', 'sku']);
-          const categoryVal = getValue(['category', 'type', 'group', 'department', 'dept']);
-
-          return {
-            name: nameVal || Object.values(clean)[0] || '', // Fallback to first column
-            price: parseFloat(priceVal || 0),
-            quantity: parseInt(qtyVal || 0),
-            barcode: barcodeVal || '',
-            category: categoryVal || 'General'
-          };
-        };
-
-        for (const rawRow of parsedData) {
-          const row = normalizeRow(rawRow);
-          if (!row.name) continue;
-          
-          let existing = await db.products.where('name').equalsIgnoreCase(row.name).first();
-          
-          let prodData;
-          if (existing) {
-            prodData = {
-              ...existing,
-              quantity: parseInt(existing.quantity) + row.quantity,
-              price: row.price || existing.price,
-              barcode: row.barcode || existing.barcode,
-              category: row.category || existing.category,
-              synced: false
-            };
-            await db.products.update(existing.id, prodData);
+            showStatus(`Imported! Added ${addedCount} new, Updated ${updatedCount} existing items.`);
+            sound.playSuccessChime();
           } else {
-            prodData = {
-              id: uuidv4(),
-              name: row.name,
-              price: row.price,
-              quantity: row.quantity,
-              barcode: row.barcode,
-              category: row.category,
-              synced: false
-            };
-            await db.products.add(prodData);
+            showStatus("No valid products found in CSV.", "error");
           }
-          
-          if (navigator.onLine && orgId && branchId) {
-             const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`, prodData.id);
-             batch.set(docRef, prodData, { merge: true });
-             batchCount++;
-
-             // Chunk Firestore batch writes in groups of 400 (limit is 500)
-             if (batchCount >= 400) {
-               await batch.commit();
-               batch = writeBatch(dbCloud);
-               batchCount = 0;
-             }
-          }
-
-          count++;
+        } catch (err) {
+          console.error(err);
+          showStatus("Import failed: " + err.message, "error");
         }
-        
-        // Commit any remaining writes
-        if (navigator.onLine && orgId && branchId && batchCount > 0) {
-           await batch.commit();
-        }
-
-        alert(`✅ ${count} Products Successfully Imported & Synced!`);
-        // Reset file input
-        document.getElementById('csvInput').value = '';
       },
       error: (error) => {
-        console.error("Error parsing CSV:", error);
-        alert("Failed to parse CSV file.");
+        showStatus("CSV parsing failed: " + error.message, "error");
+        sound.playErrorSound();
       }
     });
+    e.target.value = null;
   };
 
   const handleDelete = async (id) => {
     try {
       const prod = await db.products.get(id);
-      const productName = prod ? prod.name : 'this product';
-      const confirmDelete = window.confirm(`Are you sure you want to delete "${productName}"? This will permanently delete it from this system and sync to all other devices.`);
+      const confirmDelete = window.confirm(`Permanently delete "${prod?.name || 'this item'}"?`);
       if (!confirmDelete) return;
 
       await db.products.delete(id);
@@ -331,163 +274,218 @@ export default function InventoryScreen() {
         const docRef = doc(dbCloud, `Organizations/${orgId}/Branches/${branchId}/Products`, id);
         await deleteDoc(docRef);
       }
-      showStatus("Product successfully deleted and synced!");
+      sound.playErrorSound();
+      showStatus("Product deleted.");
     } catch (err) {
-      console.error("Failed to delete product:", err);
-      showStatus("Failed to delete product.", "error");
+      console.error(err);
     }
   };
 
+  const displayedProducts = filterLowStock 
+    ? (products || []).filter(p => p.quantity < 5)
+    : (products || []);
+
   return (
-    <div className="inventory-layout" style={{ height: '100%' }}>
+    <div className="inventory-layout animate-fade-in">
       <div className="inventory-content">
+        
+        {/* Form Column */}
         <div className={`add-product-form ${editingId ? 'editing-active' : ''}`}>
-          {editingId && (
-            <div className="edit-active-banner">
-              <span className="pulsing-dot" style={{
-                display: 'inline-block', width: '8px', height: '8px',
-                borderRadius: '50%', backgroundColor: '#fff',
-                animation: 'pulse-dot 1.5s infinite'
-              }}></span>
-              Editing Mode Active
-            </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h2 style={{ margin: 0, color: editingId ? 'var(--primary-indigo, #6366f1)' : 'inherit' }}>
-              {editingId ? 'Edit Product Details' : 'Add New Product'}
-            </h2>
-            {!editingId && (
-              <div>
-                <input 
-                  type="file" 
-                  accept=".csv" 
-                  id="csvInput" 
-                  style={{ display: 'none' }} 
-                  onChange={handleFileUpload} 
-                />
-                <button 
-                  className="btn btn-secondary" 
-                  onClick={() => document.getElementById('csvInput').click()}
-                >
-                  Import CSV
-                </button>
-              </div>
-            )}
-          </div>
+          <h2 style={{ marginBottom: '1rem', fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {editingId ? <Edit size={18} color="var(--accent-cyan)" /> : <Plus size={18} color="var(--accent-primary)" />}
+            {editingId ? 'Edit Product' : 'Add New Inventory Item'}
+          </h2>
+
           {statusMsg.text && (
             <div style={{
-              color: statusMsg.type === 'error' ? 'var(--tertiary-crimson)' : (statusMsg.type === 'info' ? 'var(--primary-navy)' : 'var(--secondary-emerald)'),
-              backgroundColor: statusMsg.type === 'error' ? '#fce8e6' : (statusMsg.type === 'info' ? '#ebf3fc' : '#e6f4ea'),
-              padding: '0.75rem',
-              borderRadius: '6px',
-              marginBottom: '1rem',
-              textAlign: 'center',
-              fontSize: '0.9rem',
-              fontWeight: 'bold',
-              border: '1px solid ' + (statusMsg.type === 'error' ? '#f5c2c2' : (statusMsg.type === 'info' ? '#c2dbf5' : '#c2f5d3'))
+              padding: '0.6rem', borderRadius: 'var(--radius-md)', marginBottom: '0.85rem',
+              fontSize: '0.82rem', fontWeight: 'bold', textAlign: 'center',
+              background: statusMsg.type === 'error' ? 'rgba(244,63,94,0.15)' : 'rgba(16,185,129,0.15)',
+              color: statusMsg.type === 'error' ? 'var(--accent-danger)' : 'var(--accent-success)'
             }}>
               {statusMsg.text}
             </div>
           )}
-          <form onSubmit={handleAddProduct} style={{ position: 'relative' }}>
-            <input 
-              type="text" 
-              name="name" 
-              placeholder="Product Name" 
-              value={formData.name} 
-              onChange={handleInputChange} 
-              autoComplete="off"
-              required 
-            />
-            {suggestions.length > 0 && (
-              <ul className="suggestions-dropdown">
-                {suggestions.map(s => (
-                  <li key={s.id} onClick={() => selectSuggestion(s)}>{s.name}</li>
-                ))}
-              </ul>
-            )}
 
-            <input type="number" name="price" placeholder="Price (Rs.)" step="0.01" value={formData.price} onChange={handleInputChange} required />
-            <input type="number" name="quantity" placeholder="Quantity" value={formData.quantity} onChange={handleInputChange} required />
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
-              <input 
-                type="text" 
-                name="barcode" 
-                placeholder="Barcode" 
-                value={formData.barcode} 
-                onChange={handleInputChange} 
-                style={{ flex: 1, marginBottom: 0 }}
-              />
-              <button 
-                type="button" 
-                className="btn btn-secondary" 
-                onClick={() => setShowScanner(true)}
-                title="Scan Barcode with Camera"
-                style={{ padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              >
-                <Camera size={20} />
-              </button>
+          <form onSubmit={handleAddProduct} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Product Name</label>
+              <input type="text" name="name" placeholder="e.g. Basmati Rice 5kg" value={formData.name} onChange={handleInputChange} autoComplete="off" required />
             </div>
-            <input type="text" name="category" placeholder="Category" value={formData.category} onChange={handleInputChange} />
-            
+
+            <div style={{ display: 'flex', gap: '0.65rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: 1 }}>
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Price (Rs.)</label>
+                <input type="number" name="price" placeholder="1250.00" step="0.01" value={formData.price} onChange={handleInputChange} required />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flex: 1 }}>
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Stock Qty</label>
+                <input type="number" name="quantity" placeholder="100" value={formData.quantity} onChange={handleInputChange} required />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Barcode / SKU</label>
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                <input type="text" name="barcode" placeholder="Scan or type barcode" value={formData.barcode} onChange={handleInputChange} style={{ flex: 1 }} />
+                <button 
+                  type="button" 
+                  onClick={() => setShowScanner(true)} 
+                  title="Scan with Camera" 
+                  style={{ 
+                    padding: '0.4rem 0.65rem', 
+                    borderRadius: '4px', 
+                    background: '#ffffff', 
+                    color: '#0f172a', 
+                    border: '1px solid #cbd5e1', 
+                    cursor: 'pointer', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center' 
+                  }}
+                >
+                  <Camera size={15} />
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Category</label>
+              <input type="text" name="category" placeholder="Groceries, Beverages, Dairy..." value={formData.category} onChange={handleInputChange} />
+            </div>
+
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
-              <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
-                {editingId ? <Check size={18} /> : <Plus size={18} />}
-                {editingId ? 'Update Product' : 'Add Product'}
+              <button type="submit" className="btn btn-cyan" style={{ flex: 1, padding: '0.7rem' }}>
+                {editingId ? 'Update Product' : 'Save to Inventory'}
               </button>
               {editingId && (
-                <button type="button" className="btn btn-secondary" onClick={handleCancelEdit}>
-                  <X size={18} /> Cancel
-                </button>
+                <button type="button" className="btn btn-secondary" onClick={handleCancelEdit} style={{ padding: '0.7rem' }}>Cancel</button>
               )}
             </div>
           </form>
         </div>
 
-        <div className="product-list">
-          <h2>Current Catalog</h2>
-          <table className="inventory-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Price (Rs.)</th>
-                <th>Stock</th>
-                <th>Barcode</th>
-                <th>Category</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {products?.map(p => {
-                const isEditing = editingId === p.id;
-                return (
-                  <tr key={p.id} className={isEditing ? 'row-editing-active' : ''}>
-                    <td style={{ fontWeight: isEditing ? 'bold' : 'normal' }}>
-                      {p.name} {isEditing && <span style={{ color: '#6366f1', fontSize: '0.8rem', fontWeight: 'bold', marginLeft: '0.4rem' }}>(editing)</span>}
-                    </td>
-                    <td style={{ fontWeight: isEditing ? 'bold' : 'normal' }}>{p.price.toFixed(2)}</td>
-                    <td>
-                      <span className={p.quantity < 5 ? "stock-low" : "stock-ok"}>{p.quantity}</span>
-                    </td>
-                    <td style={{ fontWeight: isEditing ? 'bold' : 'normal' }}>{p.barcode}</td>
-                    <td style={{ fontWeight: isEditing ? 'bold' : 'normal' }}>{p.category}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <button className="btn-icon" onClick={() => handleStartEdit(p)} title="Edit">
-                        <Edit size={18} color="var(--primary-navy)" />
-                      </button>
-                      <button className="btn-icon" onClick={() => handleDelete(p.id)} title="Delete">
-                        <Trash2 size={18} color="var(--tertiary-crimson)" />
-                      </button>
-                    </div>
-                  </td>
+        {/* Product Catalog Table */}
+        <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: '700', color: 'var(--text-primary)', margin: 0 }}>Inventory Catalog ({displayedProducts.length} Items)</h2>
+            <div style={{ display: 'flex', gap: '0.4rem' }}>
+              <button 
+                onClick={() => setFilterLowStock(!filterLowStock)}
+                style={{ 
+                  fontSize: '0.78rem', 
+                  fontWeight: '600',
+                  padding: '0.35rem 0.75rem', 
+                  borderRadius: '4px', 
+                  display: 'inline-flex', 
+                  alignItems: 'center', 
+                  gap: '0.35rem',
+                  background: filterLowStock ? '#dc2626' : '#ffffff',
+                  color: filterLowStock ? '#ffffff' : '#0f172a',
+                  border: filterLowStock ? '1px solid #dc2626' : '1px solid #cbd5e1',
+                  cursor: 'pointer'
+                }}
+              >
+                <AlertTriangle size={14} /> {filterLowStock ? 'Show All Items' : 'Low Stock Alert (<5)'}
+              </button>
+              <button 
+                onClick={handleExportCSV} 
+                style={{ 
+                  fontSize: '0.78rem', 
+                  fontWeight: '600',
+                  padding: '0.35rem 0.75rem', 
+                  borderRadius: '4px', 
+                  display: 'inline-flex', 
+                  alignItems: 'center', 
+                  gap: '0.35rem',
+                  background: '#ffffff',
+                  color: '#0f172a',
+                  border: '1px solid #cbd5e1',
+                  cursor: 'pointer'
+                }}
+              >
+                <Download size={14} /> Export CSV
+              </button>
+              
+              <label 
+                style={{ 
+                  fontSize: '0.78rem', 
+                  fontWeight: '600',
+                  padding: '0.35rem 0.75rem', 
+                  borderRadius: '4px', 
+                  display: 'inline-flex', 
+                  alignItems: 'center', 
+                  gap: '0.35rem',
+                  background: '#0f172a',
+                  color: '#ffffff',
+                  border: '1px solid #0f172a',
+                  cursor: 'pointer'
+                }}
+              >
+                <Plus size={14} /> Import CSV
+                <input 
+                  type="file" 
+                  accept=".csv" 
+                  onChange={handleImportCSV} 
+                  style={{ display: 'none' }} 
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="table-responsive" style={{ flex: 1 }}>
+            <table className="inventory-table">
+              <thead>
+                <tr>
+                  <th>Item Name</th>
+                  <th>Price</th>
+                  <th>Stock Qty</th>
+                  <th>Barcode</th>
+                  <th>Category</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
-                );
-              })}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {displayedProducts.map(p => (
+                  <tr key={p.id}>
+                    <td style={{ fontWeight: '700', color: 'var(--text-primary)' }}>{p.name}</td>
+                    <td className="price-mono" style={{ whiteSpace: 'nowrap', fontWeight: '700', color: 'var(--text-primary)' }}>
+                      Rs. {p.price.toFixed(2)}
+                    </td>
+                    <td>
+                      <span className="price-mono" style={{
+                        padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.78rem', fontWeight: '700',
+                        background: p.quantity < 5 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(22, 163, 74, 0.12)',
+                        color: p.quantity < 5 ? '#dc2626' : '#16a34a',
+                        border: p.quantity < 5 ? '1px solid rgba(239, 68, 68, 0.25)' : '1px solid rgba(22, 163, 74, 0.25)'
+                      }}>
+                        {p.quantity}
+                      </span>
+                    </td>
+                    <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{p.barcode || '—'}</td>
+                    <td>
+                      <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: '600' }}>
+                        {p.category || 'General'}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', gap: '0.35rem' }}>
+                        <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', borderRadius: '4px' }} onClick={() => handleStartEdit(p)} title="Edit">
+                          <Edit size={13} />
+                        </button>
+                        <button className="btn btn-danger" style={{ padding: '0.25rem 0.5rem', borderRadius: '4px' }} onClick={() => handleDelete(p.id)} title="Delete">
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
+
       {showScanner && (
         <BarcodeCameraScanner 
           onScan={(code) => {

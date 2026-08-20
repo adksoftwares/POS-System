@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ADKSmartPOS</string>
+    <string name="title_activity_main">ADKSmartPOS</string>
+    <string name="package_name">com.adk.smartposlanka</string>
+    <string name="custom_url_scheme">com.adk.smartposlanka</string>
+</resources>

@@ -1,81 +1,53 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/database';
-import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
-import jsPDF from 'jspdf';
 import { dbCloud } from '../config/firebase';
-import { doc, getDoc, updateDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { motion } from 'framer-motion';
-import { Trash2, Plus, Minus, ShoppingCart, Sun, Moon, Check, Search, Camera } from 'lucide-react';
-import BarcodeCameraScanner from './BarcodeCameraScanner';
+import { ShoppingCart, Sun, Moon, Monitor, Clock, Trash2, RotateCcw, Plus, Minus, Package, Search, Check } from 'lucide-react';
+import { sound } from '../services/soundService';
+import { PrinterService } from '../services/printerService';
+import { useNavigate } from 'react-router-dom';
 import './StandaloneCart.css';
 
 export default function StandaloneCart() {
-  const [cart, setCart] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchSuggestions, setSearchSuggestions] = useState([]);
-  const [selectedIndex, setSelectedIndex] = useState(-1);
-  const [showScanner, setShowScanner] = useState(false);
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('active');
+  const heldCarts = useLiveQuery(() => db.held_carts.orderBy('timestamp').reverse().toArray(), []);
+  const allProducts = useLiveQuery(() => db.products.toArray(), []);
 
-  const handleAddProductById = async (product) => {
-    const existing = cart.find(item => item.product.id === product.id);
-    let nextCart;
-    if (existing) {
-      if (existing.quantity >= product.quantity) return;
-      nextCart = cart.map(item => item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
-    } else {
-      if (product.quantity > 0) {
-        nextCart = [...cart, { product, quantity: 1, discount: 0 }];
-      } else return;
-    }
-    updateCartStateAndBroadcast(nextCart);
-  };
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogCategory, setCatalogCategory] = useState('All');
 
-  const handleKeyDown = (e) => {
-    if (searchSuggestions.length === 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setSelectedIndex(prev => (prev < searchSuggestions.length - 1 ? prev + 1 : prev));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setSelectedIndex(prev => (prev > 0 ? prev - 1 : 0));
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
-      if (selectedIndex >= 0) {
-        handleAddProductById(searchSuggestions[selectedIndex]);
-      } else {
-        handleAddProductById(searchSuggestions[0]);
-      }
-      setSearchQuery('');
-      setSearchSuggestions([]);
-      setSelectedIndex(-1);
+  const [cart, setCart] = useState(() => {
+    try {
+      const saved = localStorage.getItem('adk_active_cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
     }
-  };
+  });
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('adk_theme') === 'dark' || 
            (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
 
-  const [tier, setTier] = useState('Free');
-  const [billPrintCount, setBillPrintCount] = useState(0);
   const [shopDetails, setShopDetails] = useState({
     shopName: 'ADK SUPERMART',
     address: 'No. 45, Galle Road, Colombo, Sri Lanka',
-    phone: '+94 11 234 5678'
+    phone: '+94 11 234 5678',
+    receiptFooter: 'Thank you for shopping! Returns valid within 7 days.',
+    currency: 'Rs.'
   });
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('Cash');
-  const [bankAccounts, setBankAccounts] = useState([]);
-  const [selectedBankId, setSelectedBankId] = useState('');
-  const [fetchingBanks, setFetchingBanks] = useState(false);
 
   const orgId = localStorage.getItem('adk_orgId') || '';
-  const branchId = localStorage.getItem('adk_branchId') || 'Main';
   const userEmail = localStorage.getItem('adk_userEmail') || '';
   const isSuperAdmin = userEmail.trim().toLowerCase() === 'arikarran14@gmail.com';
-  const hasPremium = isSuperAdmin || tier === 'Premium';
 
-  // Fetch shop and organization details
   useEffect(() => {
     async function fetchOrgDetails() {
       if (!orgId) return;
@@ -83,49 +55,34 @@ export default function StandaloneCart() {
         const snap = await getDoc(doc(dbCloud, "Organizations", orgId));
         if (snap.exists()) {
           const data = snap.data();
-          setTier(data.subscriptionTier || 'Free');
-          setBillPrintCount(data.billPrintCount || 0);
           setShopDetails({
             shopName: data.shopName || 'ADK SUPERMART',
             address: data.address || 'No. 45, Galle Road, Colombo, Sri Lanka',
-            phone: data.phone || '+94 11 234 5678'
+            phone: data.phone || '+94 11 234 5678',
+            receiptFooter: data.receiptFooter || 'Thank you for shopping! Returns valid within 7 days.',
+            currency: data.currency || 'Rs.'
           });
         }
       } catch (err) {
-        console.error("Failed to fetch organization details in standalone cart:", err);
+        console.warn("Could not fetch org details offline", err);
       }
     }
     fetchOrgDetails();
+
+    const settingsChannel = new BroadcastChannel('adk_settings_sync');
+    const handleSettingsMessage = (event) => {
+      if (event.data && event.data.type === 'SHOP_DETAILS_UPDATED') {
+        setShopDetails(prev => ({ ...prev, shopName: event.data.shopName }));
+      }
+    };
+    settingsChannel.addEventListener('message', handleSettingsMessage);
+
+    return () => {
+      settingsChannel.removeEventListener('message', handleSettingsMessage);
+      settingsChannel.close();
+    };
   }, [orgId]);
 
-  // Fetch bank accounts for Checkout Modal
-  useEffect(() => {
-    async function fetchBanks() {
-      if (!showPaymentModal) return;
-      setFetchingBanks(true);
-      try {
-        const snap = await getDocs(collection(dbCloud, "BankAccounts"));
-        const list = [];
-        snap.forEach(doc => {
-          const data = doc.data();
-          if (data.isEnabled !== false) {
-            list.push({ id: doc.id, ...data });
-          }
-        });
-        setBankAccounts(list);
-        if (list.length > 0) {
-          setSelectedBankId(list[0].id);
-        }
-      } catch (err) {
-        console.error("Could not fetch bank accounts in standalone cart:", err);
-      } finally {
-        setFetchingBanks(false);
-      }
-    }
-    fetchBanks();
-  }, [showPaymentModal]);
-
-  // Sync state with parent window using BroadcastChannel
   useEffect(() => {
     const channel = new BroadcastChannel('adk_cart_sync');
     const handleMessage = (event) => {
@@ -133,6 +90,7 @@ export default function StandaloneCart() {
         const newCartJson = JSON.stringify(event.data.cart);
         setCart((prevCart) => {
           if (JSON.stringify(prevCart) !== newCartJson) {
+            sound.playScanBeep();
             return event.data.cart;
           }
           return prevCart;
@@ -140,8 +98,6 @@ export default function StandaloneCart() {
       }
     };
     channel.addEventListener('message', handleMessage);
-
-    // Initial broadcast request to get cart from POS
     channel.postMessage({ type: 'REQUEST_CART' });
 
     return () => {
@@ -150,7 +106,36 @@ export default function StandaloneCart() {
     };
   }, []);
 
-  // Sync theme
+  useEffect(() => {
+    let backButtonListener = null;
+
+    const setupBackButton = async () => {
+      try {
+        const { App: CapApp } = await import('@capacitor/app');
+        backButtonListener = await CapApp.addListener('backButton', () => {
+          navigate('/', { replace: true });
+        });
+      } catch (err) {
+        // Not running in Capacitor, fallback to history
+        window.history.pushState({ standaloneCart: true }, '', window.location.href);
+        window.addEventListener('popstate', handlePopState);
+      }
+    };
+
+    const handlePopState = () => {
+      navigate('/', { replace: true });
+    };
+
+    setupBackButton();
+
+    return () => {
+      if (backButtonListener) {
+        backButtonListener.remove();
+      }
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [navigate]);
+
   useEffect(() => {
     if (darkMode) {
       document.body.classList.add('dark-theme');
@@ -163,250 +148,79 @@ export default function StandaloneCart() {
 
   const updateCartStateAndBroadcast = (newCart) => {
     setCart(newCart);
+    try {
+      localStorage.setItem('adk_active_cart', JSON.stringify(newCart));
+    } catch (e) {
+      console.warn("Could not save active cart to localStorage", e);
+    }
     const channel = new BroadcastChannel('adk_cart_sync');
     channel.postMessage({ type: 'SYNC_CART', cart: newCart });
     channel.close();
   };
 
   const handleUpdateQuantity = (productId, newQty) => {
-    const nextCart = cart.map((item) => {
-      if (item.product.id === productId) {
-        if (newQty > item.product.quantity) {
-          alert(`Only ${item.product.quantity} items available in stock.`);
-          return item;
-        }
-        const cleanQty = Math.max(1, newQty);
-        return { ...item, quantity: cleanQty };
-      }
-      return item;
-    });
-    updateCartStateAndBroadcast(nextCart);
-  };
-
-  const handleUpdateDiscount = (productId, discount) => {
-    const nextCart = cart.map((item) => {
-      if (item.product.id === productId) {
-        const cleanDiscountPercent = Math.min(Math.max(0, discount), 100);
-        return { ...item, discount: cleanDiscountPercent };
-      }
-      return item;
-    });
-    updateCartStateAndBroadcast(nextCart);
-  };
-
-  const handleRemoveFromCart = (productId) => {
-    const nextCart = cart.filter((item) => item.product.id !== productId);
-    updateCartStateAndBroadcast(nextCart);
-  };
-
-  const handleHoldBill = () => {
-    updateCartStateAndBroadcast([]);
-  };
-
-  // Hardware Scanner Integration in Standalone window
-  useBarcodeScanner(useCallback(async (scannedBarcode) => {
-    if (!hasPremium) {
-      alert("Barcode Scanning is a Premium-Only Feature! Please upgrade settings.");
+    if (newQty <= 0) {
+      handleRemoveItem(productId);
       return;
     }
-    const product = await db.products.where('barcode').equals(scannedBarcode).first();
-    if (product) {
-      const existing = cart.find(item => item.product.id === product.id);
-      let nextCart;
-      if (existing) {
-        if (existing.quantity >= product.quantity) return;
-        nextCart = cart.map(item => item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
-      } else {
-        if (product.quantity > 0) {
-          nextCart = [...cart, { product, quantity: 1, discount: 0 }];
-        } else return;
-      }
-      updateCartStateAndBroadcast(nextCart);
+    const updated = cart.map(item => item.product.id === productId ? { ...item, quantity: newQty } : item);
+    updateCartStateAndBroadcast(updated);
+  };
+
+  const handleUpdateDiscount = (productId, newDisc) => {
+    const updated = cart.map(item => item.product.id === productId ? { ...item, discount: newDisc } : item);
+    updateCartStateAndBroadcast(updated);
+  };
+
+  const handleRemoveItem = (productId) => {
+    const updated = cart.filter(item => item.product.id !== productId);
+    updateCartStateAndBroadcast(updated);
+  };
+
+  const [selectedCatalogProd, setSelectedCatalogProd] = useState(null);
+  const [catalogCountInput, setCatalogCountInput] = useState(1);
+
+  const handleAddToCartFromCatalog = (product) => {
+    setSelectedCatalogProd(product);
+    setCatalogCountInput(1);
+  };
+
+  const handleConfirmAddQuantity = () => {
+    if (!selectedCatalogProd) return;
+    const count = Math.max(1, parseInt(catalogCountInput) || 1);
+    sound.playScanBeep();
+
+    const existingIndex = cart.findIndex((item) => item.product.id === selectedCatalogProd.id);
+    let newCart;
+    if (existingIndex > -1) {
+      newCart = cart.map((item, idx) => 
+        idx === existingIndex ? { ...item, quantity: item.quantity + count } : item
+      );
     } else {
-      alert(`Barcode "${scannedBarcode}" not found in inventory.`);
+      newCart = [...cart, { product: selectedCatalogProd, quantity: count, discount: 0 }];
     }
-  }, [cart, hasPremium]));
+    updateCartStateAndBroadcast(newCart);
+    setSelectedCatalogProd(null);
+  };
 
-  const generatePDFReceipt = (receiptId, paymentMethod, totalAmount, cartItems) => {
-    const subtotal = cartItems.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
-    const totalDiscount = cartItems.reduce((sum, item) => sum + (((item.discount || 0) / 100) * (item.product.price * item.quantity)), 0);
-    
-    const docForHeight = new jsPDF({ unit: 'mm', format: [80, 500] });
-    docForHeight.setFont('Helvetica', 'bold');
-    docForHeight.setFontSize(8);
-    
-    let totalItemLinesHeight = 0;
-    cartItems.forEach(item => {
-      const nameLines = docForHeight.splitTextToSize(item.product.name, 36);
-      const dVal = ((item.discount || 0) / 100) * (item.product.price * item.quantity);
-      totalItemLinesHeight += (nameLines.length * 4.5) + (dVal > 0 ? 3.5 : 0) + 1.5; 
-    });
+  const handleHoldBill = async () => {
+    if (cart.length === 0) return;
+    const holdId = uuidv4();
+    const totalAmount = cart.reduce((sum, item) => sum + (item.product.price * item.quantity) - (((item.discount || 0) / 100) * (item.product.price * item.quantity)), 0);
+    const label = `Hold #${Date.now().toString().slice(-4)} (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
 
-    const receiptHeight = 75 + totalItemLinesHeight;
-    const doc = new jsPDF({
-      unit: 'mm',
-      format: [80, Math.max(140, receiptHeight)]
-    });
-
-    const cashierEmail = localStorage.getItem('adk_userEmail') || 'cashier@adk.com';
-
-    // 1. Header (Store info)
-    doc.setFont('Helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text(shopDetails.shopName.toUpperCase(), 40, 10, { align: 'center' });
-    
-    doc.setFont('Helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(shopDetails.address, 40, 14, { align: 'center' });
-    doc.text(`Tel: ${shopDetails.phone}`, 40, 18, { align: 'center' });
-    
-    doc.setDrawColor(204, 204, 204); // LTGRAY
-    doc.setLineWidth(0.3);
-    doc.line(5, 21, 75, 21);
-    
-    // 2. Metadata
-    doc.setFontSize(8);
-    doc.text(`Invoice: ${receiptId}`, 5, 26);
-    doc.text(`Date   : ${new Date().toLocaleString()}`, 5, 30);
-    doc.text(`Cashier: ${cashierEmail.split('@')[0]}`, 5, 34);
-    doc.text(`Payment: ${paymentMethod.toUpperCase()}`, 5, 38);
-    
-    doc.line(5, 41, 75, 41);
-    
-    // 3. Table Headers
-    doc.setFont('Helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.text("Item", 5, 46);
-    doc.text("Qty x Price", 43, 46);
-    doc.text("Total (Rs.)", 75, 46, { align: 'right' });
-    
-    doc.line(5, 49, 75, 49);
-    
-    // 4. Items List
-    let y = 49;
-    cartItems.forEach(item => {
-      const sub = item.product.price * item.quantity;
-      const dVal = ((item.discount || 0) / 100) * sub;
-      const finalVal = sub - dVal;
-      
-      const firstLineY = y + 4.5;
-      
-      // Draw name
-      doc.setFont('Helvetica', 'bold');
-      doc.setFontSize(8);
-      const nameLines = doc.splitTextToSize(item.product.name, 36);
-      nameLines.forEach(line => {
-        y += 4.5;
-        doc.text(line, 5, y);
-      });
-      
-      // Draw Qty x Price column at firstLineY
-      doc.setFont('Helvetica', 'normal');
-      doc.setFontSize(8);
-      const qtyPriceStr = `${item.quantity} x ${item.product.price.toFixed(2)}`;
-      doc.text(qtyPriceStr, 43, firstLineY);
-      
-      // Draw Total column at firstLineY
-      doc.setFont('Helvetica', 'bold');
-      doc.setFontSize(8);
-      doc.text(`${finalVal.toFixed(2)}`, 75, firstLineY, { align: 'right' });
-      
-      // Draw discount underneath if any
-      if (item.discount > 0) {
-        y += 3.5;
-        doc.setFont('Helvetica', 'normal');
-        doc.setFontSize(7.5);
-        doc.text(`  (-Rs. ${dVal.toFixed(2)})`, 5, y);
-      }
-      y += 1.5;
-    });
-    
-    y += 4;
-    doc.line(5, y, 75, y);
-    y += 5;
-    
-    // 5. Totals
-    doc.setFont('Helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text("Subtotal:", 5, y);
-    doc.text(subtotal.toFixed(2), 75, y, { align: 'right' });
-    
-    if (totalDiscount > 0) {
-      y += 4;
-      doc.text("Discount:", 5, y);
-      doc.text(`-${totalDiscount.toFixed(2)}`, 75, y, { align: 'right' });
-    }
-    
-    // Grand Total highlights box
-    y += 6;
-    doc.setFillColor(245, 245, 245);
-    doc.rect(5, y - 4, 70, 7, 'F');
-    
-    doc.setFont('Helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.text("GRAND TOTAL:", 7, y + 1);
-    doc.text(`Rs. ${totalAmount.toFixed(2)}`, 73, y + 1, { align: 'right' });
-    
-    y += 8;
-    doc.line(5, y, 75, y);
-    y += 6;
-    
-    // Footer
-    doc.setFont('Helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text('THANK YOU FOR SHOPPING WITH US!', 40, y, { align: 'center' });
-    y += 4.5;
-    doc.text('Please come again.', 40, y, { align: 'center' });
-    y += 4.5;
-    doc.setFontSize(7);
-    doc.text('Powered by ADK Software Solutions', 40, y, { align: 'center' });
-
-    doc.save(`Receipt_${receiptId}.pdf`);
-
-    // Auto-Print receipt logic supporting both web browser (via offscreen iframe print preview) and Electron (via OS default viewer)
     try {
-      const isElectron = typeof window !== 'undefined' && window.process && window.process.type;
-
-      if (isElectron) {
-        // Save PDF to temp folder and open in system default viewer inside Electron
-        const fs = window.require('fs');
-        const path = window.require('path');
-        const os = window.require('os');
-        const { ipcRenderer } = window.require('electron');
-
-        const arrayBuffer = doc.output('arraybuffer');
-        const buffer = new Uint8Array(arrayBuffer);
-        const tempPath = path.join(os.tmpdir(), `Receipt_${receiptId}.pdf`);
-        
-        fs.writeFileSync(tempPath, buffer);
-        ipcRenderer.invoke('open-pdf', tempPath);
-      } else {
-        // Trigger standard browser print preview using a sized offscreen iframe
-        const blob = doc.output('blob');
-        const blobURL = URL.createObjectURL(blob);
-        const iframe = document.createElement('iframe');
-        iframe.style.position = 'fixed';
-        iframe.style.left = '-9999px';
-        iframe.style.width = '800px';
-        iframe.style.height = '1000px';
-        iframe.style.border = 'none';
-        iframe.src = blobURL;
-        document.body.appendChild(iframe);
-        iframe.onload = () => {
-          iframe.contentWindow.focus();
-          iframe.contentWindow.print();
-          setTimeout(() => {
-            try {
-              document.body.removeChild(iframe);
-              URL.revokeObjectURL(blobURL);
-            } catch (err) {
-              console.error("Iframe cleanup error:", err);
-            }
-          }, 60000);
-        };
-      }
-    } catch (printErr) {
-      console.error("Direct print failed, fallback to download.", printErr);
+      await db.held_carts.add({
+        id: holdId,
+        label,
+        items: cart,
+        total: totalAmount,
+        timestamp: Date.now()
+      });
+      sound.playSuccessChime();
+      updateCartStateAndBroadcast([]);
+    } catch (err) {
+      console.error("Failed to hold bill in standalone cart:", err);
     }
   };
 
@@ -416,70 +230,84 @@ export default function StandaloneCart() {
     let orgData = null;
     if (orgId) {
       try {
-        const orgRef = doc(dbCloud, "Organizations", orgId);
-        const snap = await getDoc(orgRef);
-        if (snap.exists()) {
-          orgData = snap.data();
-        }
+        const snap = await getDoc(doc(dbCloud, "Organizations", orgId));
+        if (snap.exists()) orgData = snap.data();
       } catch (err) {
         console.warn("Could not check bill limit offline.", err);
       }
     }
 
     const currentCount = orgData?.billPrintCount || 0;
-    const currentTier = orgData?.subscriptionTier || 'Free';
+    let currentTier = orgData?.subscriptionTier || 'Free';
+    if (orgData?.premium_expiry_date) {
+      const expiryDate = new Date(orgData.premium_expiry_date);
+      if (new Date() > expiryDate) {
+        currentTier = 'Free';
+      } else {
+        currentTier = 'Premium';
+      }
+    }
 
     if (!isSuperAdmin && currentTier !== 'Premium' && currentCount >= 50) {
-      alert("Billing Limit Reached! Free accounts are capped at 50 bills. Please upgrade.");
+      sound.playErrorSound();
+      alert("Billing Limit Reached!");
       return;
     }
 
     const totalAmount = cart.reduce((sum, item) => sum + (item.product.price * item.quantity) - (((item.discount || 0) / 100) * (item.product.price * item.quantity)), 0);
     const receiptId = `ADK-${Date.now()}`;
-    const itemsJson = JSON.stringify(cart.map(item => ({
-      productId: item.product.id,
-      quantity: item.quantity,
-      price: item.product.price,
-      discount: ((item.discount || 0) / 100) * (item.product.price * item.quantity)
-    })));
+    const cashierEmail = localStorage.getItem('adk_userEmail') || 'Cashier';
+
+    const transactionData = {
+      receiptId,
+      total: totalAmount,
+      totalAmount,
+      subtotal: cart.reduce((sum, i) => sum + (i.product.price * i.quantity), 0),
+      discount: cart.reduce((sum, i) => sum + (((i.discount || 0) / 100) * (i.product.price * i.quantity)), 0),
+      paymentMethod,
+      selectedBankId: null,
+      timestamp: Date.now(),
+      cashierName: cashierEmail.split('@')[0],
+      items: cart.map(item => ({
+        id: item.product.id,
+        name: item.product.name,
+        quantity: item.quantity,
+        price: item.product.price,
+        discount: item.discount || 0
+      }))
+    };
 
     try {
-      generatePDFReceipt(receiptId, paymentMethod, totalAmount, cart);
+      PrinterService.printReceipt(transactionData, shopDetails);
 
       await db.transaction('rw', db.transactions, db.products, async () => {
         await db.transactions.add({
-          receiptId,
-          totalAmount,
-          paymentMethod,
-          selectedBankId: paymentMethod === 'Bank Transfer' ? selectedBankId : null,
-          timestamp: Date.now(),
-          itemsJson
+          ...transactionData,
+          itemsJson: JSON.stringify(transactionData.items),
+          syncStatus: 'pending'
         });
 
         for (const item of cart) {
           const newQty = item.product.quantity - item.quantity;
-          await db.products.update(item.product.id, { quantity: newQty, synced: false });
+          await db.products.update(item.product.id, { quantity: newQty });
         }
       });
       
       if (navigator.onLine && orgId) {
         try {
           const orgRef = doc(dbCloud, "Organizations", orgId);
-          await updateDoc(orgRef, {
-            billPrintCount: (currentCount + 1)
-          });
-          setBillPrintCount(currentCount + 1);
+          await updateDoc(orgRef, { billPrintCount: (currentCount + 1) });
         } catch (err) {
-          console.error("Failed to increment print count in firebase:", err);
+          console.error("Firebase update failed:", err);
         }
       }
       
+      sound.playSuccessChime();
       updateCartStateAndBroadcast([]);
       setShowPaymentModal(false);
-      alert(`Checkout successful! PDF Receipt generated.`);
     } catch (error) {
       console.error("Checkout failed:", error);
-      alert("Checkout failed. Check console.");
+      sound.playErrorSound();
     }
   };
 
@@ -488,227 +316,410 @@ export default function StandaloneCart() {
   const subtotal = cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
 
   return (
-    <div className="standalone-cart-layout animate-fade-in">
-      <header className="standalone-cart-header">
-        <div className="header-left">
-          <ShoppingCart className="cart-glow-icon" size={24} />
+    <div className="standalone-cart-layout animate-fade-in" style={{ padding: '1rem' }}>
+      <header className="standalone-cart-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <Monitor size={28} color="var(--accent-cyan)" />
           <div>
-            <h1 className="shop-name">{shopDetails.shopName}</h1>
-            <p className="branch-badge">Branch: {branchId} ({tier} Account)</p>
+            <h1 className="shop-name" style={{ fontSize: '1.4rem', margin: 0 }}>{shopDetails.shopName}</h1>
+            <p className="branch-badge" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Customer Facing Display | Dual Screen Live Sync</p>
           </div>
         </div>
-        <div className="header-right">
-          <button 
-            onClick={() => setDarkMode(!darkMode)} 
-            className="theme-toggle"
-            title="Toggle theme"
-          >
-            {darkMode ? <Sun size={20} /> : <Moon size={20} />}
-          </button>
-        </div>
+        <button 
+          onClick={() => setDarkMode(!darkMode)} 
+          title="Toggle Dark Mode"
+          style={{ 
+            padding: '0.35rem 0.6rem', 
+            borderRadius: '6px', 
+            background: 'rgba(255, 255, 255, 0.1)', 
+            border: '1px solid rgba(255, 255, 255, 0.15)', 
+            color: '#ffffff', 
+            cursor: 'pointer', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center' 
+          }}
+        >
+          {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
       </header>
 
       <main className="standalone-cart-main">
         <div className="standalone-cart-grid">
           
-          {/* Left panel: Cart Items list */}
-          <div className="cart-items-section glass-panel">
-            <h2 className="section-title">🛒 Active Shopping Cart</h2>
+          {/* Left Main View (Active Cart or Held Bills Tab) */}
+          <div className="cart-items-section glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column' }}>
+            {/* Tab Navigation Header - Commercial Cashier Segmented Control */}
+            <div style={{ display: 'flex', gap: '4px', background: '#e2e8f0', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '1.25rem', flexWrap: 'nowrap', overflowX: 'auto' }}>
+              <button 
+                style={{ 
+                  flex: 1, 
+                  padding: '0.45rem 0.85rem', 
+                  borderRadius: '4px', 
+                  border: 'none', 
+                  fontSize: '0.82rem', 
+                  whiteSpace: 'nowrap', 
+                  flexShrink: 0,
+                  background: activeTab === 'active' ? '#0f172a' : 'transparent',
+                  color: activeTab === 'active' ? '#ffffff' : '#475569',
+                  fontWeight: activeTab === 'active' ? '700' : '600',
+                  boxShadow: activeTab === 'active' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                onClick={() => setActiveTab('active')}
+              >
+                <ShoppingCart size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} /> Active Order ({cart.length})
+              </button>
+              <button 
+                style={{ 
+                  flex: 1, 
+                  padding: '0.45rem 0.85rem', 
+                  borderRadius: '4px', 
+                  border: 'none', 
+                  fontSize: '0.82rem', 
+                  whiteSpace: 'nowrap', 
+                  flexShrink: 0,
+                  background: activeTab === 'held' ? '#0f172a' : 'transparent',
+                  color: activeTab === 'held' ? '#ffffff' : '#475569',
+                  fontWeight: activeTab === 'held' ? '700' : '600',
+                  boxShadow: activeTab === 'held' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                onClick={() => setActiveTab('held')}
+              >
+                <Clock size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} /> Held Bills ({(heldCarts || []).length})
+              </button>
+              <button 
+                style={{ 
+                  flex: 1, 
+                  padding: '0.45rem 0.85rem', 
+                  borderRadius: '4px', 
+                  border: 'none', 
+                  fontSize: '0.82rem', 
+                  whiteSpace: 'nowrap', 
+                  flexShrink: 0,
+                  background: activeTab === 'catalog' ? '#0f172a' : 'transparent',
+                  color: activeTab === 'catalog' ? '#ffffff' : '#475569',
+                  fontWeight: activeTab === 'catalog' ? '700' : '600',
+                  boxShadow: activeTab === 'catalog' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+                onClick={() => setActiveTab('catalog')}
+              >
+                <Package size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} /> + Add Products
+              </button>
+            </div>
             
-            {/* Search bar & camera scanner inside standalone cart */}
-            <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
-              <div className="standalone-search-wrapper" style={{ position: 'relative', flex: 1, marginBottom: 0 }}>
-                <div className="standalone-search-bar" style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                  <Search size={18} color="var(--text-muted)" style={{ marginRight: '0.75rem' }} />
-                  <input 
-                    type="text" 
-                    placeholder="Search and add products to this cart... (by name or barcode)" 
-                    value={searchQuery}
-                    onChange={async (e) => {
-                      const val = e.target.value;
-                      setSearchQuery(val);
-                      setSelectedIndex(-1);
-                      if (val.length > 0) {
-                        const nameResults = await db.products.where('name').startsWithIgnoreCase(val).limit(10).toArray();
-                        const barcodeResults = await db.products.where('barcode').equals(val).toArray();
-                        const combined = [...barcodeResults, ...nameResults];
-                        const unique = combined.filter((item, index) => combined.findIndex(x => x.id === item.id) === index).slice(0, 10);
-                        setSearchSuggestions(unique);
-                      } else {
-                        setSearchSuggestions([]);
-                      }
-                    }}
-                    onKeyDown={handleKeyDown}
-                    autoComplete="off"
-                    style={{ border: 'none', outline: 'none', flex: 1, fontSize: '0.95rem', background: 'transparent', color: 'var(--text-primary)' }}
-                  />
-                </div>
-                {searchSuggestions.length > 0 && (
-                  <ul className="suggestions-dropdown" style={{ 
-                    position: 'absolute', top: '100%', left: 0, right: 0, 
-                    background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', 
-                    borderRadius: 'var(--radius-md)', zIndex: 10, listStyle: 'none', padding: 0, margin: '4px 0 0 0',
-                    boxShadow: 'var(--shadow-md)', maxHeight: '200px', overflowY: 'auto'
-                  }}>
-                    {searchSuggestions.map((s, idx) => (
-                      <li 
-                        key={s.id} 
-                        onClick={() => {
-                          handleAddProductById(s);
-                          setSearchQuery('');
-                          setSearchSuggestions([]);
-                        }}
-                        style={{ 
-                          padding: '0.75rem 1rem', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          background: idx === selectedIndex ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
-                          borderBottom: '1px solid var(--border-light)'
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                          <span style={{ fontSize: '0.7rem', fontWeight: 'bold', textTransform: 'uppercase', padding: '0.15rem 0.4rem', borderRadius: '4px', background: 'var(--border-light)', color: 'var(--text-secondary)' }}>{s.category || 'General'}</span>
-                          <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>{s.name}</span>
-                          <span style={{ fontSize: '0.75rem', color: s.quantity <= 5 ? 'var(--accent-danger)' : 'var(--text-muted)' }}>(Qty: {s.quantity})</span>
+            {activeTab === 'active' && (
+              <div className="cart-scroll-container">
+                {cart.map((item) => {
+                  const itemSub = item.product.price * item.quantity;
+                  const itemDisc = ((item.discount || 0) / 100) * itemSub;
+                  const itemTotal = itemSub - itemDisc;
+
+                  return (
+                    <div key={item.product.id} className="cart-item-card glass-card" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', padding: '0.6rem 0.75rem', marginBottom: '0.45rem', gap: '0.75rem' }}>
+                      <div style={{ flex: '1 1 200px', minWidth: '150px' }}>
+                        <span className="item-category" style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)', padding: '0.1rem 0.35rem' }}>{item.product.category || 'General'}</span>
+                        <h3 className="item-name" style={{ fontSize: '0.92rem', margin: '0.2rem 0' }}>{item.product.name}</h3>
+                        <span className="price-mono" style={{ color: 'var(--text-secondary)', fontSize: '0.78rem' }}>@ Rs. {item.product.price.toFixed(2)}</span>
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.85rem', flex: '1 1 auto', justifyContent: 'flex-end' }}>
+                        {/* Quantity Adjusters */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <button className="qty-btn" onClick={() => handleUpdateQuantity(item.product.id, item.quantity - 1)}>
+                            <Minus size={11} />
+                          </button>
+                          <input 
+                            type="number" 
+                            className="qty-input"
+                            value={item.quantity} 
+                            onChange={(e) => handleUpdateQuantity(item.product.id, parseInt(e.target.value) || 1)}
+                            min="1"
+                          />
+                          <button className="qty-btn" onClick={() => handleUpdateQuantity(item.product.id, item.quantity + 1)}>
+                            <Plus size={11} />
+                          </button>
                         </div>
-                        <span style={{ color: 'var(--accent-success)', fontWeight: '700', fontSize: '0.9rem' }}>Rs. {s.price.toFixed(2)}</span>
-                      </li>
-                    ))}
-                  </ul>
+
+                        {/* Discount % Input */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>Disc%:</span>
+                          <input 
+                            type="number" 
+                            className="disc-input"
+                            value={item.discount || ''} 
+                            placeholder="0"
+                            onChange={(e) => handleUpdateDiscount(item.product.id, parseFloat(e.target.value) || 0)}
+                            min="0"
+                            max="100"
+                          />
+                        </div>
+
+                        {/* Final Price */}
+                        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.1rem', minWidth: '75px' }}>
+                          <span className="price-mono" style={{ fontSize: '0.95rem', fontWeight: 'bold', color: 'var(--accent-cyan)' }}>Rs. {itemTotal.toFixed(2)}</span>
+                          {item.discount > 0 && <span style={{ fontSize: '0.68rem', color: 'var(--accent-success)', fontWeight: 'bold' }}>-Rs. {itemDisc.toFixed(2)}</span>}
+                        </div>
+
+                        <button className="delete-btn" style={{ padding: '0.3rem' }} onClick={() => handleRemoveItem(item.product.id)} title="Remove Item">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {cart.length === 0 && (
+                  <div className="empty-cart-state" style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    <ShoppingCart size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                    <h3>Welcome to {shopDetails.shopName}</h3>
+                    <p>Your scanned items will display here in real-time.</p>
+                  </div>
                 )}
               </div>
-              <button 
-                type="button" 
-                className="qty-btn" 
-                onClick={() => setShowScanner(true)}
-                title="Scan Barcode with Camera"
-                style={{ padding: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 'var(--radius-md)', width: '42px', height: '42px', border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', cursor: 'pointer' }}
-              >
-                <Camera size={18} />
-              </button>
-            </div>
-            
-            <div className="cart-scroll-container">
-              {cart.map((item) => {
-                const itemSub = item.product.price * item.quantity;
-                const itemDisc = ((item.discount || 0) / 100) * itemSub;
-                const itemTotal = itemSub - itemDisc;
+            )}
 
-                return (
-                  <div key={item.product.id} className="cart-item-card">
-                    <div className="item-meta">
-                      <span className="item-category">{item.product.category || 'General'}</span>
-                      <h3 className="item-name">{item.product.name}</h3>
-                      <span className="item-unit-price">Rs. {item.product.price.toFixed(2)}</span>
-                    </div>
-
-                    <div className="item-adjusters">
-                      {/* Quantity Controls */}
-                      <div className="qty-row">
-                        <button className="qty-btn" onClick={() => handleUpdateQuantity(item.product.id, item.quantity - 1)}>
-                          <Minus size={14} />
-                        </button>
-                        <input 
-                          type="number" 
-                          className="qty-input" 
-                          value={item.quantity}
-                          min="1"
-                          onChange={(e) => handleUpdateQuantity(item.product.id, parseInt(e.target.value) || 1)}
-                        />
-                        <button className="qty-btn" onClick={() => handleUpdateQuantity(item.product.id, item.quantity + 1)}>
-                          <Plus size={14} />
-                        </button>
+            {activeTab === 'held' && (
+              <div className="cart-scroll-container">
+                {(!heldCarts || heldCarts.length === 0) ? (
+                  <div className="empty-cart-state" style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    <Clock size={48} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+                    <h3>No Held Bills</h3>
+                    <p>When cashier holds a bill (F8), it will appear here.</p>
+                  </div>
+                ) : (
+                  heldCarts.map((held) => (
+                    <div key={held.id} className="glass-card" style={{ padding: '1.1rem', marginBottom: '1rem', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--accent-cyan)', fontWeight: '700' }}>{held.label}</h3>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{new Date(held.timestamp).toLocaleString()}</span>
+                        </div>
+                        <span className="price-mono" style={{ fontSize: '1.2rem', fontWeight: '800', color: 'var(--accent-success)' }}>
+                          Rs. {(held.total || 0).toFixed(2)}
+                        </span>
                       </div>
 
-                      {/* Discount Controls */}
-                      <div className="discount-row">
-                        <span className="disc-label">Disc (%):</span>
-                        <input 
-                          type="number" 
-                          className="disc-input" 
-                          value={item.discount || ''}
-                          placeholder="0"
-                          min="0"
-                          max="100"
-                          onChange={(e) => handleUpdateDiscount(item.product.id, parseFloat(e.target.value) || 0)}
-                        />
-                        {item.discount > 0 && (
-                          <span className="disc-value">-Rs. {itemDisc.toFixed(2)}</span>
-                        )}
+                      <div style={{ display: 'flex', gap: '0.4rem', margin: '0.6rem 0', flexWrap: 'wrap' }}>
+                        {(held.items || []).map((i, idx) => (
+                          <span key={idx} style={{ fontSize: '0.75rem', background: 'rgba(99,102,241,0.15)', color: 'var(--text-primary)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
+                            {i.product?.name || i.name} x {i.quantity}
+                          </span>
+                        ))}
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.75rem' }}>
+                        <button 
+                          className="btn btn-cyan" 
+                          style={{ flex: 1, padding: '0.45rem 0.8rem', fontSize: '0.82rem' }}
+                          onClick={async () => {
+                            await db.held_carts.delete(held.id);
+                            updateCartStateAndBroadcast(held.items || []);
+                            setActiveTab('active');
+                            sound.playSuccessChime();
+                          }}
+                        >
+                          <RotateCcw size={14} /> Restore Order
+                        </button>
+                        <button 
+                          className="btn btn-danger" 
+                          style={{ padding: '0.45rem 0.8rem', fontSize: '0.82rem' }}
+                          onClick={async () => {
+                            await db.held_carts.delete(held.id);
+                            sound.playErrorSound();
+                          }}
+                        >
+                          <Trash2 size={14} /> Delete
+                        </button>
                       </div>
                     </div>
-
-                    <div className="item-summary">
-                      <span className="item-final-price">Rs. {itemTotal.toFixed(2)}</span>
-                      <button className="delete-btn" onClick={() => handleRemoveFromCart(item.product.id)} title="Remove Item">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {cart.length === 0 && (
-                <div className="empty-cart-state">
-                  <ShoppingCart size={64} className="pulse-icon" />
-                  <h3>Waiting for cashier...</h3>
-                  <p>Items added to the bill will display here in real-time.</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right panel: Summary & Checkout */}
-          <div className="cart-summary-section glass-panel">
-            <h2 className="section-title">📊 Order Summary</h2>
-            
-            <div className="summary-details">
-              <div className="summary-row">
-                <span>Subtotal</span>
-                <span>Rs. {subtotal.toFixed(2)}</span>
+                  ))
+                )}
               </div>
-              <div className="summary-row discount">
-                <span>Discounts Applied</span>
-                <span>-Rs. {totalDiscount.toFixed(2)}</span>
-              </div>
-              
-              <div className="summary-divider"></div>
-              
-              <div className="summary-row total">
-                <span>Grand Total</span>
-                <span className="grand-total-amount">Rs. {totalAmount.toFixed(2)}</span>
-              </div>
+            )}
 
-              {tier === 'Free' && !isSuperAdmin && (
-                <div className="bill-usage-container">
-                  <div className="bill-usage-header">
-                    <span>Invoice Usage (Free Tier)</span>
-                    <span className={billPrintCount >= 45 ? 'warn-usage' : ''}>{billPrintCount}/50 Bills</span>
-                  </div>
-                  <div className="progress-bar-bg">
-                    <div 
-                      className={`progress-fill ${billPrintCount >= 45 ? 'warn' : ''}`}
-                      style={{ width: `${Math.min(100, (billPrintCount / 50) * 100)}%` }}
+            {activeTab === 'catalog' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', flex: 1 }}>
+                {/* Search & Category Filters */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-md)' }}>
+                    <Search size={16} color="var(--text-muted)" style={{ marginRight: '0.5rem' }} />
+                    <input 
+                      type="text"
+                      placeholder="Search products by name or barcode..."
+                      value={catalogSearch}
+                      onChange={(e) => setCatalogSearch(e.target.value)}
+                      style={{ border: 'none', background: 'transparent', outline: 'none', flex: 1, color: 'var(--text-primary)', fontSize: '0.88rem' }}
                     />
                   </div>
+
+                  {/* Category Pills - Commercial Cashier Segmented Control */}
+                  <div style={{ display: 'flex', gap: '4px', background: '#e2e8f0', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1', overflowX: 'auto' }}>
+                    {['All', ...new Set((allProducts || []).map(p => p.category || 'General'))].map((cat) => (
+                      <button 
+                        key={cat}
+                        style={{ 
+                          borderRadius: '4px', 
+                          padding: '0.35rem 0.85rem', 
+                          fontSize: '0.8rem', 
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                          border: 'none',
+                          background: catalogCategory === cat ? '#0f172a' : 'transparent',
+                          color: catalogCategory === cat ? '#ffffff' : '#475569',
+                          fontWeight: catalogCategory === cat ? '700' : '600',
+                          boxShadow: catalogCategory === cat ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                        onClick={() => setCatalogCategory(cat)}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              )}
+
+                {/* Product Folder / List Details View */}
+                <div className="cart-scroll-container" style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {(allProducts || [])
+                    .filter(p => {
+                      const matchesCategory = catalogCategory === 'All' || (p.category || 'General') === catalogCategory;
+                      const matchesSearch = p.name?.toLowerCase().includes(catalogSearch.toLowerCase()) || 
+                                            p.barcode?.toLowerCase().includes(catalogSearch.toLowerCase());
+                      return matchesCategory && matchesSearch;
+                    })
+                    .map((prod) => {
+                      const existingItem = cart.find(item => item.product.id === prod.id);
+                      return (
+                        <div 
+                          key={prod.id} 
+                          className="glass-card" 
+                          style={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center', 
+                            padding: '0.55rem 0.85rem', 
+                            borderRadius: 'var(--radius-md)', 
+                            border: '1px solid var(--border-color)', 
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease'
+                          }}
+                          onClick={() => handleAddToCartFromCatalog(prod)}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <span style={{ fontSize: '0.68rem', fontWeight: 'bold', textTransform: 'uppercase', padding: '0.15rem 0.45rem', borderRadius: '4px', background: 'rgba(99,102,241,0.15)', color: 'var(--accent-cyan)' }}>
+                              {prod.category || 'General'}
+                            </span>
+                            <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>{prod.name}</span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+                            <span className="price-mono" style={{ color: 'var(--accent-cyan)', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                              Rs. {prod.price.toFixed(2)}
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                              Stock: {prod.quantity}
+                            </span>
+                            {existingItem ? (
+                              <span style={{ fontSize: '0.75rem', background: 'rgba(16, 185, 129, 0.2)', color: 'var(--accent-success)', fontWeight: 'bold', padding: '0.2rem 0.55rem', borderRadius: '50px', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                                <Check size={12} /> {existingItem.quantity}
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '0.75rem', background: 'rgba(99, 102, 241, 0.2)', color: 'var(--accent-primary)', fontWeight: 'bold', padding: '0.2rem 0.55rem', borderRadius: '50px', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                                <Plus size={12} /> Add
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                  {(allProducts || []).filter(p => {
+                    const matchesCategory = catalogCategory === 'All' || (p.category || 'General') === catalogCategory;
+                    const matchesSearch = p.name?.toLowerCase().includes(catalogSearch.toLowerCase()) || 
+                                          p.barcode?.toLowerCase().includes(catalogSearch.toLowerCase());
+                    return matchesCategory && matchesSearch;
+                  }).length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)' }}>
+                      <Package size={40} style={{ opacity: 0.3, marginBottom: '0.75rem' }} />
+                      <p style={{ margin: 0, fontWeight: '600' }}>No products found matching "{catalogSearch}"</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Customer Facing Total Display */}
+          <div className="cart-summary-section glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', overflowY: 'auto' }}>
+            <div>
+              <h2 className="section-title" style={{ fontSize: '1.25rem', marginBottom: '1.25rem' }}>Summary Total</h2>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Subtotal</span>
+                  <span className="price-mono">Rs. {subtotal.toFixed(2)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--accent-success)' }}>
+                  <span>Discount</span>
+                  <span className="price-mono">-Rs. {totalDiscount.toFixed(2)}</span>
+                </div>
+                
+                <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '0.5rem 0' }} />
+                
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem' }}>
+                  <span style={{ fontSize: '1.15rem', fontWeight: 'bold' }}>Grand Total</span>
+                  <span className="price-mono grand-total-amount" style={{ color: '#10b981', fontWeight: '800' }}>
+                    Rs. {totalAmount.toFixed(2)}
+                  </span>
+                </div>
+              </div>
             </div>
 
-            <div className="summary-actions">
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexShrink: 0 }}>
               <button 
-                className="btn btn-secondary" 
-                onClick={handleHoldBill}
-                disabled={cart.length === 0}
-                style={{ flex: 1, padding: '1rem' }}
+                className="btn" 
+                onClick={handleHoldBill} 
+                disabled={cart.length === 0} 
+                style={{ 
+                  flex: 1, 
+                  padding: '0.75rem', 
+                  background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', 
+                  color: '#ffffff', 
+                  border: 'none', 
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 4px 14px rgba(245, 158, 11, 0.35)',
+                  fontWeight: '700',
+                  opacity: cart.length === 0 ? 0.4 : 1,
+                  cursor: cart.length === 0 ? 'not-allowed' : 'pointer'
+                }}
               >
-                Hold Bill
+                Hold
               </button>
               <button 
-                className="btn btn-primary" 
-                onClick={() => setShowPaymentModal(true)}
-                disabled={cart.length === 0 || (tier === 'Free' && !isSuperAdmin && billPrintCount >= 50)}
-                style={{ flex: 2, padding: '1rem' }}
+                className="btn" 
+                onClick={() => setShowPaymentModal(true)} 
+                disabled={cart.length === 0} 
+                style={{ 
+                  flex: 2, 
+                  padding: '0.75rem', 
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', 
+                  color: '#ffffff', 
+                  border: 'none', 
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 4px 18px rgba(16, 185, 129, 0.4)',
+                  fontWeight: '700',
+                  opacity: cart.length === 0 ? 0.4 : 1,
+                  cursor: cart.length === 0 ? 'not-allowed' : 'pointer'
+                }}
               >
-                Checkout
+                Complete Payment
               </button>
             </div>
           </div>
@@ -716,101 +727,101 @@ export default function StandaloneCart() {
         </div>
       </main>
 
-      {/* Checkout Payment Dialog overlay */}
       {showPaymentModal && (
-        <div className="payment-modal-overlay">
-          <motion.div 
-            className="payment-modal glass-panel"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ type: "spring", duration: 0.3 }}
-          >
-            <h3 className="modal-title">Select Invoice Payment Method</h3>
-            
-            <div className="payment-options-grid">
-              <div 
-                className={`payment-option-card ${paymentMethod === 'Cash' ? 'active' : ''}`}
-                onClick={() => setPaymentMethod('Cash')}
-              >
-                <div className="select-indicator">
-                  {paymentMethod === 'Cash' && <Check size={14} />}
-                </div>
-                <span className="option-icon">💵</span>
-                <h4>Cash Settlement</h4>
-                <p>Process invoice using cash float</p>
-              </div>
-
-              <div 
-                className={`payment-option-card ${paymentMethod === 'Bank Transfer' ? 'active' : ''}`}
-                onClick={() => setPaymentMethod('Bank Transfer')}
-              >
-                <div className="select-indicator">
-                  {paymentMethod === 'Bank Transfer' && <Check size={14} />}
-                </div>
-                <span className="option-icon">🏛️</span>
-                <h4>Bank Transfer</h4>
-                <p>Process invoice using active bank ledger</p>
-              </div>
+        <div className="payment-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(10px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 99999 }}>
+          <motion.div className="payment-modal glass-panel" initial={{ scale: 0.9 }} animate={{ scale: 1 }} style={{ padding: '2rem', width: '400px' }}>
+            <h3 style={{ marginBottom: '1.5rem', fontSize: '1.3rem' }}>Confirm Customer Payment</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+              <label>Select Payment Method</label>
+              <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+                <option value="Cash">💵 Cash</option>
+                <option value="Card">💳 Card Payment</option>
+                <option value="QR / UPI">📱 QR Settlement</option>
+              </select>
             </div>
-
-            {paymentMethod === 'Bank Transfer' && (
-              <div className="bank-selector-container">
-                <label className="input-label">Select Active Bank Account</label>
-                {fetchingBanks ? (
-                  <p className="loading-banks">Syncing active ledger accounts...</p>
-                ) : bankAccounts.length === 0 ? (
-                  <p className="no-banks-configured">No accounts configured by administrators.</p>
-                ) : (
-                  <select 
-                    value={selectedBankId} 
-                    onChange={e => setSelectedBankId(e.target.value)}
-                    className="bank-select"
-                  >
-                    {bankAccounts.map(b => (
-                      <option key={b.id} value={b.id}>
-                        {b.bankName} - {b.accountNumber} ({b.accountHolder})
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            )}
-
-            <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setShowPaymentModal(false)}>
-                Cancel
-              </button>
-              <button 
-                className="btn btn-success" 
-                onClick={handleCheckout}
-                disabled={paymentMethod === 'Bank Transfer' && bankAccounts.length === 0}
-              >
-                Complete Payment & Print
-              </button>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowPaymentModal(false)}>Cancel</button>
+              <button className="btn btn-success" style={{ flex: 1 }} onClick={handleCheckout}>Print Receipt</button>
             </div>
           </motion.div>
         </div>
       )}
 
-      {showScanner && (
-        <BarcodeCameraScanner 
-          onScan={async (code) => {
-            if (!hasPremium) {
-              alert("Barcode Scanning is a Premium-Only Feature! Please upgrade settings.");
-              setShowScanner(false);
-              return;
-            }
-            const product = await db.products.where('barcode').equals(code).first();
-            if (product) {
-              await handleAddProductById(product);
-            } else {
-              alert(`Barcode "${code}" not found in inventory.`);
-            }
-            setShowScanner(false);
-          }}
-          onClose={() => setShowScanner(false)}
-        />
+      {/* Quantity Prompt Modal Dialog */}
+      {selectedCatalogProd && (
+        <div className="payment-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 99999 }}>
+          <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={{ padding: '1.5rem', width: '380px', background: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', boxShadow: '0 10px 25px rgba(0,0,0,0.25)' }}>
+            <h3 style={{ margin: '0 0 0.4rem 0', fontSize: '1.15rem', color: '#0f172a', fontWeight: '700' }}>Add Product Quantity</h3>
+            <p style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: '#475569' }}>
+              <strong>{selectedCatalogProd.name}</strong> (@ Rs. {selectedCatalogProd.price.toFixed(2)})
+            </p>
+            
+            {/* Count Input Box */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '0.85rem' }}>
+              <label style={{ fontSize: '0.78rem', fontWeight: '700', color: '#334155' }}>Enter Count / Quantity:</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button 
+                  type="button"
+                  style={{ width: '36px', height: '36px', borderRadius: '4px', border: '1px solid #cbd5e1', background: '#f1f5f9', fontSize: '1.2rem', fontWeight: 'bold', cursor: 'pointer', color: '#0f172a' }}
+                  onClick={() => setCatalogCountInput(prev => Math.max(1, (parseInt(prev) || 1) - 1))}
+                >
+                  -
+                </button>
+                <input 
+                  type="number"
+                  min="1"
+                  max={selectedCatalogProd.quantity || 999}
+                  value={catalogCountInput}
+                  onChange={(e) => setCatalogCountInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleConfirmAddQuantity();
+                  }}
+                  style={{ flex: 1, height: '36px', textAlign: 'center', fontSize: '1.1rem', fontWeight: 'bold', border: '1px solid #cbd5e1', borderRadius: '4px', background: '#ffffff', color: '#0f172a', outline: 'none' }}
+                  autoFocus
+                />
+                <button 
+                  type="button"
+                  style={{ width: '36px', height: '36px', borderRadius: '4px', border: '1px solid #cbd5e1', background: '#f1f5f9', fontSize: '1.2rem', fontWeight: 'bold', cursor: 'pointer', color: '#0f172a' }}
+                  onClick={() => setCatalogCountInput(prev => (parseInt(prev) || 1) + 1)}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1.25rem' }}>
+              {[1, 2, 5, 10, 20].map(num => (
+                <button 
+                  key={num}
+                  type="button"
+                  style={{ flex: 1, padding: '0.3rem', borderRadius: '4px', border: '1px solid #cbd5e1', background: catalogCountInput == num ? '#0f172a' : '#f8fafc', color: catalogCountInput == num ? '#ffffff' : '#334155', fontWeight: '700', fontSize: '0.78rem', cursor: 'pointer' }}
+                  onClick={() => setCatalogCountInput(num)}
+                >
+                  +{num}
+                </button>
+              ))}
+            </div>
+
+            {/* Action Buttons */}
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button 
+                type="button"
+                style={{ flex: 1, padding: '0.55rem', borderRadius: '4px', border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontWeight: '600', fontSize: '0.85rem', cursor: 'pointer' }}
+                onClick={() => setSelectedCatalogProd(null)}
+              >
+                Cancel
+              </button>
+              <button 
+                type="button"
+                style={{ flex: 1.5, padding: '0.55rem', borderRadius: '4px', border: 'none', background: '#16a34a', color: '#ffffff', fontWeight: '700', fontSize: '0.85rem', cursor: 'pointer' }}
+                onClick={handleConfirmAddQuantity}
+              >
+                Add to Cart
+              </button>
+            </div>
+          </motion.div>
+        </div>
       )}
     </div>
   );

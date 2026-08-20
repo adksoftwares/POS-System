@@ -24,6 +24,8 @@ export function useSyncManager() {
               await setDoc(doc(dbCloud, "Organizations", orgId), {
                 shopName: "ADK Supermart",
                 subscriptionTier: "Free",
+                ownerId: user.uid,
+                ownerEmail: user.email,
                 createdAt: new Date().toISOString()
               });
               await setDoc(doc(dbCloud, "Users", user.uid), {
@@ -58,6 +60,8 @@ export function useSyncManager() {
             await setDoc(doc(dbCloud, "Organizations", orgId), {
               shopName: "ADK Supermart",
               subscriptionTier: "Free",
+              ownerId: user.uid,
+              ownerEmail: user.email,
               createdAt: new Date().toISOString()
             });
 
