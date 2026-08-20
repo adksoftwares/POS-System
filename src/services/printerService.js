@@ -108,14 +108,14 @@ export class PrinterService {
             <td style="padding-top: 5px;">TOTAL:</td>
             <td style="text-align: right; padding-top: 5px;">${this.formatCurrency(transaction.total, currency)}</td>
           </tr>
-          ${transaction.cashTendered ? `
+          ${transaction.cashReceived ? `
           <tr>
             <td>Cash Paid:</td>
-            <td style="text-align: right;">${this.formatCurrency(transaction.cashTendered, currency)}</td>
+            <td style="text-align: right;">${this.formatCurrency(transaction.cashReceived, currency)}</td>
           </tr>
           <tr>
             <td>Change:</td>
-            <td style="text-align: right;">${this.formatCurrency(transaction.changeAmount || 0, currency)}</td>
+            <td style="text-align: right;">${this.formatCurrency(transaction.changeDue || 0, currency)}</td>
           </tr>` : ''}
         </table>
 

@@ -373,7 +373,7 @@ export default function PosScreen() {
     }
   };
 
-  const handleCheckout = async (paymentMethod, selectedBankId = null, cashTendered = null) => {
+  const handleCheckout = async (paymentMethod, selectedBankId = null, cashTendered = '') => {
     if (cart.length === 0) return;
 
     let orgData = null;
@@ -407,8 +407,8 @@ export default function PosScreen() {
       discount: cart.reduce((sum, i) => sum + (((i.discount || 0) / 100) * (i.product.price * i.quantity)), 0),
       paymentMethod,
       selectedBankId,
-      cashTendered: cashTendered ? parseFloat(cashTendered) : null,
-      changeAmount: cashTendered ? parseFloat(cashTendered) - totalAmount : null,
+      cashReceived: cashTendered ? parseFloat(cashTendered) : null,
+      changeDue: cashTendered ? parseFloat(cashTendered) - totalAmount : 0,
       timestamp: Date.now(),
       cashierName: cashierEmail.split('@')[0],
       items: cart.map(item => ({
