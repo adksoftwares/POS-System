@@ -4,7 +4,8 @@
   "webDir": "dist",
   "plugins": {
     "CapacitorUpdater": {
-      "autoUpdate": true
+      "autoUpdate": true,
+      "appId": "com.adk.smartposlanka"
     }
   }
 }

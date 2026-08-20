@@ -43,6 +43,7 @@ export default function StandaloneCart() {
 
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [cashTendered, setCashTendered] = useState('');
 
   const orgId = localStorage.getItem('adk_orgId') || '';
   const userEmail = localStorage.getItem('adk_userEmail') || '';
@@ -305,6 +306,7 @@ export default function StandaloneCart() {
       sound.playSuccessChime();
       updateCartStateAndBroadcast([]);
       setShowPaymentModal(false);
+      setCashTendered('');
     } catch (error) {
       console.error("Checkout failed:", error);
       sound.playErrorSound();
@@ -704,7 +706,7 @@ export default function StandaloneCart() {
               </button>
               <button 
                 className="btn" 
-                onClick={() => setShowPaymentModal(true)} 
+                onClick={() => { setCashTendered(''); setShowPaymentModal(true); }} 
                 disabled={cart.length === 0} 
                 style={{ 
                   flex: 2, 
@@ -733,12 +735,34 @@ export default function StandaloneCart() {
             <h3 style={{ marginBottom: '1.5rem', fontSize: '1.3rem' }}>Confirm Customer Payment</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
               <label>Select Payment Method</label>
-              <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+              <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', outline: 'none' }}>
                 <option value="Cash">💵 Cash</option>
                 <option value="Card">💳 Card Payment</option>
                 <option value="QR / UPI">📱 QR Settlement</option>
               </select>
             </div>
+            
+            {paymentMethod === 'Cash' && (
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Cash Tendered</label>
+                  <input 
+                    type="number" 
+                    value={cashTendered} 
+                    onChange={e => setCashTendered(e.target.value)} 
+                    placeholder="0.00"
+                    style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', outline: 'none', fontSize: '1.1rem', fontWeight: 'bold' }} 
+                  />
+                </div>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>Balance</label>
+                  <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--bg-primary)', color: (parseFloat(cashTendered || 0) - totalAmount) >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)', border: '1px solid var(--border-light)', fontSize: '1.1rem', fontWeight: 'bold' }}>
+                    Rs. {cashTendered ? (parseFloat(cashTendered) - totalAmount).toFixed(2) : '0.00'}
+                  </div>
+                </div>
+              </div>
+            )}
+            
             <div style={{ display: 'flex', gap: '1rem' }}>
               <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setShowPaymentModal(false)}>Cancel</button>
               <button className="btn btn-success" style={{ flex: 1 }} onClick={handleCheckout}>Print Receipt</button>

@@ -15,6 +15,7 @@ export default function Cart({ cartItems, onRemove, onHoldBill, onRestoreCart, o
   const [showHeldModal, setShowHeldModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [cashTendered, setCashTendered] = useState('');
   const [bankAccounts, setBankAccounts] = useState([]);
   const [selectedBankId, setSelectedBankId] = useState('');
   const [fetchingBanks, setFetchingBanks] = useState(false);
@@ -48,6 +49,7 @@ export default function Cart({ cartItems, onRemove, onHoldBill, onRestoreCart, o
 
   const handleCheckoutClick = () => {
     if (cartItems.length === 0) return;
+    setCashTendered('');
     setShowPaymentModal(true);
   };
 
@@ -55,6 +57,7 @@ export default function Cart({ cartItems, onRemove, onHoldBill, onRestoreCart, o
     onCheckout(paymentMethod, paymentMethod === 'Bank Transfer' ? selectedBankId : null);
     setShowPaymentModal(false);
     setPaymentMethod('Cash');
+    setCashTendered('');
   };
 
   const handleOpenStandaloneCart = () => {
@@ -328,6 +331,36 @@ export default function Cart({ cartItems, onRemove, onHoldBill, onRestoreCart, o
                 <option value="Bank Transfer">🏛️ Direct Bank Transfer</option>
               </select>
             </div>
+
+            {paymentMethod === 'Cash' && (
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', fontSize: '0.9rem' }}>Cash Tendered (Rs.)</label>
+                  <input 
+                    type="number" 
+                    value={cashTendered}
+                    onChange={(e) => setCashTendered(e.target.value)}
+                    placeholder={totalAmount.toFixed(2)}
+                    style={{
+                      width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-color)', background: 'var(--bg-secondary)',
+                      color: 'var(--text-primary)', outline: 'none', fontSize: '1.1rem', fontWeight: 'bold'
+                    }}
+                  />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '600', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Balance (Change)</label>
+                  <div style={{
+                    width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border-light)', background: 'var(--bg-primary)',
+                    color: (parseFloat(cashTendered || 0) - totalAmount) >= 0 ? 'var(--accent-success)' : 'var(--accent-danger)', 
+                    fontSize: '1.1rem', fontWeight: 'bold'
+                  }}>
+                    Rs. {cashTendered ? (parseFloat(cashTendered) - totalAmount).toFixed(2) : '0.00'}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {paymentMethod === 'Bank Transfer' && (
               <div className="form-group" style={{ marginBottom: '1.5rem' }}>
