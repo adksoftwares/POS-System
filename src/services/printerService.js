@@ -1,3 +1,8 @@
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
+import { Share } from '@capacitor/share';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+
 // Hardware Thermal Printer & ESC/POS Receipt Printing Service
 
 export class PrinterService {
@@ -62,15 +67,14 @@ export class PrinterService {
           <div class="sub-text">${address}</div>
           <div class="sub-text">Tel: ${phone} | Tax ID: ${taxNumber}</div>
         </div>
-
+        
         <div class="divider"></div>
-
-        <div>
-          <div><strong>Receipt #:</strong> ${transaction.receiptId || 'REC-0000'}</div>
-          <div><strong>Date:</strong> ${dateStr}</div>
-          <div><strong>Cashier:</strong> ${transaction.cashierName || 'Cashier 1'}</div>
-          ${transaction.customerName ? `<div><strong>Customer:</strong> ${transaction.customerName}</div>` : ''}
-          <div><strong>Pay Method:</strong> ${(transaction.paymentMethod || 'CASH').toUpperCase()}</div>
+        
+        <div style="font-size: 11px;">
+          <div><b>Receipt #:</b> ${transaction.receiptId}</div>
+          <div><b>Date:</b> ${dateStr}</div>
+          <div><b>Cashier:</b> ${transaction.cashierName || 'Admin'}</div>
+          <div><b>Pay Method:</b> ${transaction.paymentMethod}</div>
         </div>
 
         <div class="divider"></div>
@@ -137,8 +141,121 @@ export class PrinterService {
     `;
   }
 
-  // Execute direct window print of receipt
-  static printReceipt(transaction, storeConfig = {}) {
+  // Generates PDF and opens native share dialog on Android
+  static async generateAndSharePDF(transaction, storeConfig = {}) {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: [80, 200]
+      });
+
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.text(storeConfig.shopName || 'ADK SUPERMART', 40, 10, { align: 'center' });
+      
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text(storeConfig.address || 'Colombo, Sri Lanka', 40, 15, { align: 'center' });
+      if (storeConfig.phone) {
+        doc.text(storeConfig.phone, 40, 19, { align: 'center' });
+      }
+      
+      doc.setLineDashPattern([1, 1], 0);
+      doc.line(5, 23, 75, 23);
+      doc.setLineDashPattern([], 0);
+
+      doc.text(`Receipt #: ${transaction.receiptId}`, 5, 28);
+      doc.text(`Date: ${new Date(transaction.timestamp || Date.now()).toLocaleString()}`, 5, 32);
+      doc.text(`Cashier: ${transaction.cashierName || 'Admin'}`, 5, 36);
+      doc.text(`Pay Method: ${transaction.paymentMethod || 'Cash'}`, 5, 40);
+
+      const tableData = (transaction.items || []).map(item => [
+        `${item.name}\nx ${item.quantity}`,
+        this.formatCurrency(item.price * item.quantity, storeConfig.currency || 'Rs.')
+      ]);
+
+      doc.autoTable({
+        startY: 44,
+        head: [['Item', 'Amount']],
+        body: tableData,
+        theme: 'plain',
+        styles: { fontSize: 9, cellPadding: 1, font: 'helvetica' },
+        columnStyles: {
+          0: { cellWidth: 45 },
+          1: { cellWidth: 25, halign: 'right' }
+        },
+        margin: { left: 5, right: 5 }
+      });
+
+      let finalY = doc.lastAutoTable.finalY + 5;
+      
+      doc.line(5, finalY, 75, finalY);
+      finalY += 5;
+
+      if (transaction.subtotal && transaction.discount) {
+        doc.text("Subtotal:", 5, finalY);
+        doc.text(this.formatCurrency(transaction.subtotal, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+        finalY += 5;
+        doc.text("Discount:", 5, finalY);
+        doc.text(`-${this.formatCurrency(transaction.discount, storeConfig.currency || 'Rs.')}`, 75, finalY, { align: 'right' });
+        finalY += 5;
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text("TOTAL:", 5, finalY);
+      doc.text(this.formatCurrency(transaction.totalAmount || transaction.total, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+
+      if (transaction.cashReceived) {
+        finalY += 6;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(9);
+        doc.text("Cash Paid:", 5, finalY);
+        doc.text(this.formatCurrency(transaction.cashReceived, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+        
+        finalY += 5;
+        doc.text("Change:", 5, finalY);
+        doc.text(this.formatCurrency(transaction.changeDue || 0, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+      }
+
+      finalY += 10;
+      doc.setFontSize(8);
+      const footerMsg = storeConfig.receiptFooter || "Thank you for shopping!";
+      const splitFooter = doc.splitTextToSize(footerMsg, 70);
+      doc.text(splitFooter, 40, finalY, { align: 'center' });
+
+      const pdfBase64 = doc.output('datauristring').split(',')[1];
+      const fileName = `${transaction.receiptId}.pdf`;
+
+      const savedFile = await Filesystem.writeFile({
+        path: fileName,
+        data: pdfBase64,
+        directory: Directory.Cache
+      });
+
+      await Share.share({
+        title: 'Share Receipt',
+        text: `Receipt from ${storeConfig.shopName || 'ADK Supermart'}`,
+        url: savedFile.uri,
+        dialogTitle: 'Share Receipt PDF'
+      });
+    } catch (err) {
+      console.error("PDF Generation/Sharing failed:", err);
+      alert("Failed to generate PDF: " + err.message);
+    }
+  }
+
+  // Execute direct window print of receipt or Native PDF Share on Android
+  static async printReceipt(transaction, storeConfig = {}) {
+    const isAndroid = /android/i.test(navigator.userAgent);
+    
+    if (isAndroid) {
+      await this.generateAndSharePDF(transaction, storeConfig);
+      return;
+    }
+
+    // Fallback to desktop window print
     const printWindow = window.open('', '_blank', 'width=400,height=600');
     if (printWindow) {
       printWindow.document.write(this.generateReceiptHTML(transaction, storeConfig));
