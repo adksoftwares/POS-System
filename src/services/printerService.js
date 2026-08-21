@@ -161,7 +161,7 @@ export class PrinterService {
         doc.text(storeConfig.phone, 40, 19, { align: 'center' });
       }
       
-      doc.setLineDashPattern([1, 1], 0);
+      doc.setLineDashPattern([2, 2], 0);
       doc.line(5, 23, 75, 23);
       doc.setLineDashPattern([], 0);
 
@@ -171,7 +171,7 @@ export class PrinterService {
       doc.text(`Pay Method: ${transaction.paymentMethod || 'Cash'}`, 5, 40);
 
       const tableData = (transaction.items || []).map(item => [
-        `${item.name}\nx ${item.quantity}`,
+        `${item.name} x${item.quantity}`,
         this.formatCurrency(item.price * item.quantity, storeConfig.currency || 'Rs.')
       ]);
 
@@ -180,7 +180,7 @@ export class PrinterService {
         head: [['Item', 'Amount']],
         body: tableData,
         theme: 'plain',
-        styles: { fontSize: 9, cellPadding: 1, font: 'helvetica' },
+        styles: { fontSize: 9, cellPadding: 1, font: 'helvetica', valign: 'top' },
         columnStyles: {
           0: { cellWidth: 45 },
           1: { cellWidth: 25, halign: 'right' }
@@ -188,35 +188,39 @@ export class PrinterService {
         margin: { left: 5, right: 5 }
       });
 
-      let finalY = doc.lastAutoTable.finalY + 5;
+      let finalY = doc.lastAutoTable.finalY + 3;
       
+      doc.setLineDashPattern([2, 2], 0);
       doc.line(5, finalY, 75, finalY);
+      doc.setLineDashPattern([], 0);
       finalY += 5;
+
+      const rightAlignX = 74; // Match table right padding
 
       if (transaction.subtotal && transaction.discount) {
         doc.text("Subtotal:", 5, finalY);
-        doc.text(this.formatCurrency(transaction.subtotal, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+        doc.text(this.formatCurrency(transaction.subtotal, storeConfig.currency || 'Rs.'), rightAlignX, finalY, { align: 'right' });
         finalY += 5;
         doc.text("Discount:", 5, finalY);
-        doc.text(`-${this.formatCurrency(transaction.discount, storeConfig.currency || 'Rs.')}`, 75, finalY, { align: 'right' });
+        doc.text(`-${this.formatCurrency(transaction.discount, storeConfig.currency || 'Rs.')}`, rightAlignX, finalY, { align: 'right' });
         finalY += 5;
       }
 
       doc.setFont("helvetica", "bold");
       doc.setFontSize(11);
       doc.text("TOTAL:", 5, finalY);
-      doc.text(this.formatCurrency(transaction.totalAmount || transaction.total, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+      doc.text(this.formatCurrency(transaction.totalAmount || transaction.total, storeConfig.currency || 'Rs.'), rightAlignX, finalY, { align: 'right' });
 
       if (transaction.cashReceived) {
         finalY += 6;
         doc.setFont("helvetica", "normal");
         doc.setFontSize(9);
         doc.text("Cash Paid:", 5, finalY);
-        doc.text(this.formatCurrency(transaction.cashReceived, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+        doc.text(this.formatCurrency(transaction.cashReceived, storeConfig.currency || 'Rs.'), rightAlignX, finalY, { align: 'right' });
         
         finalY += 5;
         doc.text("Change:", 5, finalY);
-        doc.text(this.formatCurrency(transaction.changeDue || 0, storeConfig.currency || 'Rs.'), 75, finalY, { align: 'right' });
+        doc.text(this.formatCurrency(transaction.changeDue || 0, storeConfig.currency || 'Rs.'), rightAlignX, finalY, { align: 'right' });
       }
 
       finalY += 10;
