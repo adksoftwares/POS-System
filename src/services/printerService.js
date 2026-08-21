@@ -1,5 +1,5 @@
-import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { Share } from '@capacitor/share';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 
@@ -175,7 +175,7 @@ export class PrinterService {
         this.formatCurrency(item.price * item.quantity, storeConfig.currency || 'Rs.')
       ]);
 
-      doc.autoTable({
+      autoTable(doc, {
         startY: 44,
         head: [['Item', 'Amount']],
         body: tableData,

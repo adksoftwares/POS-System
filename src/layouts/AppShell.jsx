@@ -31,7 +31,7 @@ export default function AppShell() {
         if (!res.ok) return;
         const data = await res.json();
         const latestVersion = data.tag_name.replace('v', '');
-        const currentVersion = '1.0.4'; // App Version
+        const currentVersion = '1.0.7'; // App Version
         
         if (latestVersion !== currentVersion && latestVersion > currentVersion) {
           const apkAsset = data.assets.find(a => a.name.endsWith('.apk'));
