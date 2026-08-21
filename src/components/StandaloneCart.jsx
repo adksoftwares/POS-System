@@ -563,7 +563,7 @@ export default function StandaloneCart() {
                   </div>
 
                   {/* Category Pills - Commercial Cashier Segmented Control */}
-                  <div style={{ display: 'flex', gap: '4px', background: '#e2e8f0', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1', overflowX: 'auto', flexShrink: 0, minHeight: '38px' }}>
+                  <div className="hide-scrollbar" style={{ display: 'flex', gap: '4px', background: '#e2e8f0', padding: '4px 4px 10px 4px', borderRadius: '6px', border: '1px solid #cbd5e1', overflowX: 'auto', flexShrink: 0, minHeight: '38px' }}>
                     {['All', ...new Set((allProducts || []).map(p => p.category || 'General'))].map((cat) => (
                       <button 
                         key={cat}
