@@ -548,9 +548,9 @@ export default function StandaloneCart() {
             )}
 
             {activeTab === 'catalog' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', flex: 1 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', flex: 1, minHeight: 0 }}>
                 {/* Search & Category Filters */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', flexShrink: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-md)' }}>
                     <Search size={16} color="var(--text-muted)" style={{ marginRight: '0.5rem' }} />
                     <input 
@@ -563,7 +563,7 @@ export default function StandaloneCart() {
                   </div>
 
                   {/* Category Pills - Commercial Cashier Segmented Control */}
-                  <div style={{ display: 'flex', gap: '4px', background: '#e2e8f0', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1', overflowX: 'auto' }}>
+                  <div style={{ display: 'flex', gap: '4px', background: '#e2e8f0', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1', overflowX: 'auto', flexShrink: 0, minHeight: '38px' }}>
                     {['All', ...new Set((allProducts || []).map(p => p.category || 'General'))].map((cat) => (
                       <button 
                         key={cat}

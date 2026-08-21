@@ -16,9 +16,9 @@ export default function ProductGrid({ products, onAddToCart }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', overflow: 'hidden' }}>
       {/* Top Controls Bar: Category Pills + View Mode Switcher */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
         {/* Category Filter Pills - Commercial Cashier Segmented Control */}
-        <div className="category-tabs" style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#e2e8f0', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1', overflowX: 'auto', minHeight: '42px' }}>
+        <div className="category-tabs" style={{ flex: 1, background: '#e2e8f0', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1', overflowX: 'auto' }}>
           {categories.map((cat) => (
             <button
               key={cat}
