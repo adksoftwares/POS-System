@@ -23,6 +23,35 @@ export default function AppShell() {
       }
     }
     initUpdater();
+
+    // Custom GitHub Auto-Update Check for Android APK
+    async function checkGitHubUpdates() {
+      try {
+        const res = await fetch('https://api.github.com/repos/adksoftwares/POS-System/releases/latest');
+        if (!res.ok) return;
+        const data = await res.json();
+        const latestVersion = data.tag_name.replace('v', '');
+        const currentVersion = '1.0.3'; // App Version
+        
+        if (latestVersion !== currentVersion && latestVersion > currentVersion) {
+          const apkAsset = data.assets.find(a => a.name.endsWith('.apk'));
+          if (apkAsset) {
+            const wantUpdate = window.confirm(`A new Android App update (v${latestVersion}) is available!\n\nDo you want to download and install it now?`);
+            if (wantUpdate) {
+              window.open(apkAsset.browser_download_url, '_system');
+            }
+          }
+        }
+      } catch (err) {
+        console.error("GitHub Update Check Failed:", err);
+      }
+    }
+
+    // Only run custom GitHub check on Android, because Electron handles Windows automatically
+    const isAndroid = /android/i.test(navigator.userAgent);
+    if (isAndroid) {
+      setTimeout(checkGitHubUpdates, 5000);
+    }
   }, []);
 
   const location = useLocation();
