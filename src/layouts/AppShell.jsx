@@ -36,8 +36,15 @@ export default function AppShell() {
         if (latestVersion !== currentVersion && latestVersion > currentVersion) {
           const apkAsset = data.assets.find(a => a.name.endsWith('.apk'));
           if (apkAsset) {
-            const wantUpdate = window.confirm(`A new Android App update (v${latestVersion}) is available!\n\nDo you want to download and install it now?`);
-            if (wantUpdate) {
+            const { Dialog } = await import('@capacitor/dialog');
+            const { value } = await Dialog.confirm({
+              title: 'Update Available',
+              message: `A new version (v${latestVersion}) of the app is available.\n\nDo you want to download and install it now?`,
+              okButtonTitle: 'Update',
+              cancelButtonTitle: 'Maybe Later'
+            });
+            
+            if (value) {
               window.open(apkAsset.browser_download_url, '_system');
             }
           }

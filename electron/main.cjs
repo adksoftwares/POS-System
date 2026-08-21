@@ -5,28 +5,31 @@ const { autoUpdater } = require('electron-updater');
 const isDev = !app.isPackaged;
 
 // Configure auto-updater
-autoUpdater.autoDownload = true;
+autoUpdater.autoDownload = false; // Require user permission to download
 autoUpdater.autoInstallOnAppQuit = true;
 
-autoUpdater.on('update-available', () => {
+autoUpdater.on('update-available', (info) => {
   dialog.showMessageBox({
     type: 'info',
     title: 'Update Available',
-    message: 'A new update for ADK Smart POS is available and is downloading in the background. Please continue your work, we will notify you when it is ready.',
-    buttons: ['OK']
+    message: `A new version (v${info.version}) of ADK Smart POS is available. Do you want to download and install it now?`,
+    buttons: ['Update', 'Maybe Later']
+  }).then((returnValue) => {
+    if (returnValue.response === 0) {
+      // User clicked 'Update'
+      autoUpdater.downloadUpdate();
+    }
   });
 });
 
 autoUpdater.on('update-downloaded', () => {
   dialog.showMessageBox({
     type: 'info',
-    title: 'Update Ready to Install',
-    message: 'The new update has been downloaded successfully. Do you want to restart and install it now?',
-    buttons: ['Restart Now', 'Later']
-  }).then((returnValue) => {
-    if (returnValue.response === 0) {
-      autoUpdater.quitAndInstall();
-    }
+    title: 'Update Ready',
+    message: 'The update has been downloaded. The application will restart now to install it.',
+    buttons: ['Restart Now']
+  }).then(() => {
+    autoUpdater.quitAndInstall();
   });
 });
 
