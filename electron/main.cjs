@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const { autoUpdater } = require('electron-updater');
 
@@ -7,6 +7,28 @@ const isDev = !app.isPackaged;
 // Configure auto-updater
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on('update-available', () => {
+  dialog.showMessageBox({
+    type: 'info',
+    title: 'Update Available',
+    message: 'A new update for ADK Smart POS is available and is downloading in the background. Please continue your work, we will notify you when it is ready.',
+    buttons: ['OK']
+  });
+});
+
+autoUpdater.on('update-downloaded', () => {
+  dialog.showMessageBox({
+    type: 'info',
+    title: 'Update Ready to Install',
+    message: 'The new update has been downloaded successfully. Do you want to restart and install it now?',
+    buttons: ['Restart Now', 'Later']
+  }).then((returnValue) => {
+    if (returnValue.response === 0) {
+      autoUpdater.quitAndInstall();
+    }
+  });
+});
 
 let win;
 
